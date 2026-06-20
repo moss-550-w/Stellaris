@@ -26,6 +26,8 @@ let timeScale = 1;
 let tick = 0;
 let lastReal = 0;
 let timer: number | null = null;
+/** 不足一个固定步长的模拟年余量，跨 tick 累积（修复低速档归零暂停） */
+let pendingYears = 0;
 
 const HISTORY_LIMIT = 20;
 const undoStack: WorldState[] = [];
@@ -125,16 +127,23 @@ function loop(): void {
   lastReal = now;
   if (realDt > 0.1) realDt = 0.1;
 
-  const advanceYears = realSecondsToSimYears(realDt, timeScale);
+  // 累加本 tick 应推进的模拟年。低速档单 tick 不足一个固定步长时，
+  // 余量跨 tick 累积，凑够一步再积分——否则 round/floor 归零会表现为「暂停」。
+  pendingYears += realSecondsToSimYears(realDt, timeScale);
 
   let dt = FIXED_DT_YEARS;
-  let steps = Math.round(advanceYears / dt);
+  let steps = Math.floor(pendingYears / dt);
   let detailOmitted = false;
 
   if (steps > MAX_STEPS_PER_TICK) {
     detailOmitted = true;
-    if (timeScale > HIGH_SPEED_THRESHOLD) dt = advanceYears / MAX_STEPS_PER_TICK;
+    // 高速：用大步长一次性消化全部累积量，保护状态稳定；
+    // 非高速截断：丢弃超额量（不滞后膨胀），对齐既有降速语义。
+    if (timeScale > HIGH_SPEED_THRESHOLD) dt = pendingYears / MAX_STEPS_PER_TICK;
     steps = MAX_STEPS_PER_TICK;
+    pendingYears = 0;
+  } else {
+    pendingYears -= steps * dt; // 仅保留不足一步的余量到下一 tick
   }
 
   for (let s = 0; s < steps; s++) {
@@ -177,6 +186,7 @@ function startLoop(): void {
   if (running || world.count === 0) return;
   running = true;
   lastReal = performance.now();
+  pendingYears = 0; // 启动/恢复时清陈旧余量，避免暂停间隔后突跳
   loop();
 }
 
