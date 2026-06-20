@@ -6,7 +6,7 @@
  * 增删用 swap-remove（O(1)，顺序无关因有稳定 id）。
  */
 import { PRNG } from '@/core/prng';
-import { computeAccelerations, verletStep, semiImplicitEulerStep } from './integrator';
+import { computeAccelerations, verletStep, semiImplicitEulerStep, rk4Step } from './integrator';
 import { classifyCollision } from './collision';
 import {
   stageFor,
@@ -232,7 +232,10 @@ export class World {
 
   /** 推进一个物理步（按当前精度档选择积分器），随后施加航天器推力冲量 */
   step(dt: number): void {
-    if (this.mode === 'standard') {
+    if (this.mode === 'precise') {
+      // 实验档：RK4 自带 4 阶精度、不依赖历史加速度
+      rk4Step(this.positions, this.velocities, this.masses, this.count, dt);
+    } else if (this.mode === 'standard') {
       verletStep(this.positions, this.velocities, this.masses, this.count, dt, this.accOld, this.accNew);
     } else {
       semiImplicitEulerStep(this.positions, this.velocities, this.masses, this.count, dt, this.accOld);

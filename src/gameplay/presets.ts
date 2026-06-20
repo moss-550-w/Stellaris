@@ -11,6 +11,8 @@ export interface PresetDef {
   key: string;
   name: string;
   build: () => NewBody[];
+  /** 是否为高精度实验场景（V2.0 阶段七）；UI 可分组并提示切换实验档观测 */
+  experiment?: boolean;
 }
 
 /** 圆轨道：绕原点中心质量 centralMass、半径 r、相位 angle 放置 */
@@ -109,11 +111,72 @@ function blackholeSystem(): NewBody[] {
   return [bh, ...orbiters];
 }
 
+/**
+ * 经典实验场景一：8 字编舞（Chenciner–Montgomery 三体周期解）。
+ * 三颗等质量恒星沿同一条 8 字曲线追逐，是已知最优美的三体精确周期解。
+ * 该解对积分误差极敏感——流畅/标准档会逐圈发散，唯有实验档(RK4)可长期保形，
+ * 是检验积分器精度的黄金标尺。
+ *
+ * 初值取自 G=1、m=1 的标准解，统一按本项目 G=4π² 将速度 ×2π 等价缩放
+ * （位形不变、时间重标度），周期约 1 年，契合感知时间。原解在 xy 平面，
+ * 此处映射到本项目轨道平面 xz（第二分量 → z）。
+ */
+function figureEight(): NewBody[] {
+  const TWO_PI = Math.PI * 2;
+  const r1x = 0.97000436;
+  const r1z = -0.24308753;
+  const v3x = -0.93240737 * TWO_PI;
+  const v3z = -0.86473146 * TWO_PI;
+  const v12x = -v3x / 2;
+  const v12z = -v3z / 2;
+  const base = { type: 'star' as const, mass: 1, radius: 0.05 };
+  return [
+    { ...base, color: 0xffd2a0, seed: 80, x: r1x, y: 0, z: r1z, vx: v12x, vy: 0, vz: v12z },
+    { ...base, color: 0xa0d2ff, seed: 81, x: -r1x, y: 0, z: -r1z, vx: v12x, vy: 0, vz: v12z },
+    { ...base, color: 0xb6ffa6, seed: 82, x: 0, y: 0, z: 0, vx: v3x, vy: 0, vz: v3z },
+  ];
+}
+
+/**
+ * 经典实验场景二：拉格朗日 L4/L5 特洛伊。
+ * 主星 + 一颗行星定义旋转参考系，两颗 mass≈0 测试粒子分置 L4（超前 60°）、
+ * L5（滞后 60°），与行星构成等边三角形并共转。质量比 M/m=1000 ≫ 24.96，
+ * 满足三角拉格朗日点线性稳定判据：理想积分下小天体应在平衡点附近长期天平动，
+ * 借此对比各积分档的位置保持能力。
+ */
+function lagrangeTrojans(): NewBody[] {
+  const M = 1;
+  const r = 2.4;
+  const v = Math.sqrt((G * M) / r);
+  const sun: NewBody = {
+    type: 'star', mass: M, radius: 0.3, color: 0xfff1cf, seed: 90,
+    x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
+  };
+  const planet: NewBody = {
+    type: 'gas', mass: 1e-3, radius: 0.14, color: 0xd8a060, seed: 91,
+    x: r, y: 0, z: 0, vx: 0, vy: 0, vz: v,
+  };
+  // ±60° 处的测试粒子（mass=0：受引力不施引力，纯净观测平衡点）
+  const trojan = (sign: number, seed: number, color: number): NewBody => {
+    const a = (sign * Math.PI) / 3;
+    const cx = Math.cos(a);
+    const sz = Math.sin(a);
+    return {
+      type: 'rocky', mass: 0, radius: 0.07, color, seed,
+      x: r * cx, y: 0, z: r * sz,
+      vx: -sz * v, vy: 0, vz: cx * v,
+    };
+  };
+  return [sun, planet, trojan(1, 92, 0x9fe0a0), trojan(-1, 93, 0xe09fa0)];
+}
+
 export const PRESETS: PresetDef[] = [
   { key: 'single', name: '单恒星系统', build: singleStar },
   { key: 'binary', name: '双星系统', build: binary },
   { key: 'triangle', name: '三星编舞', build: triangle },
   { key: 'blackhole', name: '黑洞系统', build: blackholeSystem },
+  { key: 'figure8', name: '8 字编舞', build: figureEight, experiment: true },
+  { key: 'lagrange', name: '拉格朗日 L4/L5', build: lagrangeTrojans, experiment: true },
 ];
 
 /** 为天体列表分配稳定 id，组装为 WorldState */

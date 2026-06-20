@@ -7,6 +7,7 @@ import EditorPanel from '@/ui/EditorPanel.vue';
 import ChallengePanel from '@/ui/ChallengePanel.vue';
 import SaveMenu from '@/ui/SaveMenu.vue';
 import Onboarding from '@/ui/Onboarding.vue';
+import DiagnosticsHud from '@/ui/DiagnosticsHud.vue';
 import { TIME_SCALES, DEFAULT_SCALE_INDEX } from '@/core/time';
 import { DEFAULT_QUALITY, type QualityLevel } from '@/store/settings';
 import type { BodyPatch, IntegrationMode } from '@/physics/types';
@@ -44,6 +45,7 @@ const ui = reactive<SimUIState>({
   evolutionIndex: DEFAULT_EVOLUTION_INDEX,
   discovered: [],
   discoveryToast: null,
+  diagnostics: null,
 });
 
 let controller: SimulationController | null = null;
@@ -116,6 +118,14 @@ async function onScreenshot(): Promise<void> {
   const dataUrl = await controller?.captureScreenshot();
   if (dataUrl) downloadDataUrl(`stellaris-${stamp()}.png`, dataUrl);
 }
+function onExportReport(): void {
+  const csv = controller?.exportDiagnosticsCsv();
+  if (!csv) {
+    alert('暂无诊断数据：请在实验档运行片刻后再导出');
+    return;
+  }
+  downloadText(`stellaris-diagnostics-${stamp()}.csv`, csv);
+}
 function onGuide(): void {
   onboarding.value?.open();
 }
@@ -147,6 +157,7 @@ function onGuide(): void {
   <ChallengePanel :state="ui" @select="onChallenge" />
   <EditorPanel :state="ui" @edit="onEdit" @remove="onRemove" @close="onCloseEditor" @thrust="onThrust" />
   <ControlPanel :state="ui" @select="onSelect" @evolution="onEvolution" />
+  <DiagnosticsHud :state="ui" @export-report="onExportReport" />
 
   <transition name="toast">
     <div v-if="ui.discoveryToast" class="toast" @click="onDismissToast">

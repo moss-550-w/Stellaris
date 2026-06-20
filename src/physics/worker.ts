@@ -13,6 +13,7 @@ import { STRIDE } from './types';
 import { FIXED_DT_YEARS, MAX_STEPS_PER_TICK } from './constants';
 import { realSecondsToSimYears, HIGH_SPEED_THRESHOLD } from '@/core/time';
 import { World, predictTrajectory } from './world';
+import { computeEnergy, computeAngularMomentum } from './diagnostics';
 
 const ctx = self as unknown as {
   onmessage: ((e: MessageEvent<PhysicsCommand>) => void) | null;
@@ -32,6 +33,40 @@ const redoStack: WorldState[] = [];
 
 const TICK_MS = 16;
 const PREDICT_DT = FIXED_DT_YEARS;
+
+// —— 守恒量诊断（V2.0 阶段七，仅实验精度档）——
+// 基线在「进入实验档 / 加载 / 结构变化」时重建，drift 自该基线起算。
+let energyBaseline: number | null = null;
+let angularBaseline: number | null = null;
+let diagLoopCounter = 0;
+/** 低频发送间隔（loop 迭代数）；16ms×15≈0.25s，HUD 平滑且 O(N²) 计算开销可忽略 */
+const DIAG_EVERY_LOOPS = 15;
+
+/** 结构变化后置空基线 → 下次发送时按当前状态重建 */
+function invalidateDiagnostics(): void {
+  energyBaseline = null;
+  angularBaseline = null;
+}
+
+/** 计算并回传守恒量与相对基线漂移 */
+function emitDiagnostics(): void {
+  const energy = computeEnergy(world.positions, world.velocities, world.masses, world.count);
+  const angular = computeAngularMomentum(world.positions, world.velocities, world.masses, world.count);
+  if (energyBaseline === null || angularBaseline === null) {
+    energyBaseline = energy;
+    angularBaseline = angular;
+  }
+  const eRef = Math.abs(energyBaseline) > 1e-12 ? Math.abs(energyBaseline) : 1;
+  const aRef = Math.abs(angularBaseline) > 1e-12 ? Math.abs(angularBaseline) : 1;
+  ctx.postMessage({
+    kind: 'diagnostics',
+    simYears: world.simYears,
+    energy,
+    angularMomentum: angular,
+    energyDrift: (energy - energyBaseline) / eRef,
+    angularDrift: (angular - angularBaseline) / aRef,
+  });
+}
 
 function pushHistory(): void {
   undoStack.push(world.serialize());
@@ -77,6 +112,7 @@ function emitSnapshot(detailOmitted: boolean): void {
 
 /** 编辑/碰撞/撤销后刷新渲染端（集合 + 一帧位置） */
 function refresh(): void {
+  invalidateDiagnostics(); // 结构/状态已变，守恒基线作废
   emitBodies();
   emitSnapshot(false);
 }
@@ -111,6 +147,7 @@ function loop(): void {
   // 演化步进（低频，按演化倍率推进恒星年龄）；阶段跃迁可能改变外观/类型
   const evoEvents = world.evolveStep(advanced * world.evolutionScale);
   if (evoEvents.length > 0) {
+    invalidateDiagnostics(); // 质量/类型已变，守恒基线作废
     emitBodies(); // 外观/类型已变，先更新 mesh 映射
     ctx.postMessage({ kind: 'evolution', events: evoEvents });
   }
@@ -118,11 +155,21 @@ function loop(): void {
   // 每 tick 检测一次碰撞（粒度足够，避免逐子步开销）
   const events = world.handleCollisions();
   if (events.length > 0) {
+    invalidateDiagnostics(); // 天体集合已变，守恒基线作废
     emitBodies(); // 集合已变，先更新 mesh 映射
     ctx.postMessage({ kind: 'collision', events });
   }
 
   emitSnapshot(detailOmitted);
+
+  // 实验精度档：低频回传守恒量诊断（HUD + 报告采样）
+  if (world.mode === 'precise') {
+    if (++diagLoopCounter >= DIAG_EVERY_LOOPS) {
+      diagLoopCounter = 0;
+      emitDiagnostics();
+    }
+  }
+
   timer = self.setTimeout(loop, TICK_MS);
 }
 
@@ -170,6 +217,11 @@ ctx.onmessage = (e: MessageEvent<PhysicsCommand>): void => {
 
     case 'setMode':
       world.setMode(cmd.mode);
+      if (cmd.mode === 'precise') {
+        // 进入实验档：重建基线并立即回传一帧（暂停时 HUD 也有初值）
+        invalidateDiagnostics();
+        emitDiagnostics();
+      }
       break;
 
     case 'setEvolutionScale':

@@ -11,8 +11,12 @@ export const STRIDE = 3;
 
 export type BodyType = 'star' | 'rocky' | 'gas' | 'blackhole' | 'spacecraft';
 
-/** 积分精度档：fluid = 流畅(半隐式欧拉)，standard = 标准(velocity Verlet) */
-export type IntegrationMode = 'fluid' | 'standard';
+/**
+ * 积分精度档：
+ * fluid = 流畅(半隐式欧拉)，standard = 标准(velocity Verlet)，precise = 实验(RK4，V2.0 阶段七)。
+ * precise 为隔离的高精度实验档，不改变默认双档手感。
+ */
+export type IntegrationMode = 'fluid' | 'standard' | 'precise';
 
 /**
  * 航天器推力模式（V2.0 阶段六）：
@@ -180,6 +184,18 @@ export interface EvolutionMessage {
   events: EvolutionEvent[];
 }
 
+/** 守恒量诊断（V2.0 阶段七），仅实验精度档低频发送 */
+export interface DiagnosticsMessage {
+  kind: 'diagnostics';
+  simYears: number;
+  energy: number;
+  angularMomentum: number;
+  /** 相对基线的能量漂移（比例，如 1e-6） */
+  energyDrift: number;
+  /** 相对基线的角动量漂移（比例） */
+  angularDrift: number;
+}
+
 export interface PredictionMessage {
   kind: 'prediction';
   id: number;
@@ -195,5 +211,6 @@ export type PhysicsOutbound =
   | SnapshotMessage
   | CollisionMessage
   | EvolutionMessage
+  | DiagnosticsMessage
   | PredictionMessage
   | PongMessage;

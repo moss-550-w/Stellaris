@@ -39,6 +39,9 @@ function onQuality(e: Event): void {
       <button :class="{ active: state.mode === 'standard' }" @click="emit('mode', 'standard')" title="velocity Verlet，高精度判定基准">
         标准
       </button>
+      <button :class="{ active: state.mode === 'precise' }" @click="emit('mode', 'precise')" title="RK4 四阶，守恒量诊断·实验沙盘">
+        实验
+      </button>
     </div>
 
     <button class="act" @click="emit('add')">＋ 天体</button>

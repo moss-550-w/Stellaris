@@ -65,6 +65,19 @@ export interface SelectedInfo {
   thrustMode: ThrustMode;
 }
 
+/** 守恒量诊断实时读数（V2.0 阶段七），仅实验精度档有效 */
+export interface DiagnosticsInfo {
+  simYears: number;
+  energy: number;
+  angularMomentum: number;
+  /** 相对基线的能量漂移（比例） */
+  energyDrift: number;
+  /** 相对基线的角动量漂移（比例） */
+  angularDrift: number;
+  /** 已采样点数（供报告导出提示） */
+  samples: number;
+}
+
 export interface SimUIState {
   presetKey: string;
   simYears: number;
@@ -89,6 +102,8 @@ export interface SimUIState {
   discovered: string[];
   /** 最近一次探测器飞掠解锁的提示（瞬态），null 表示无 */
   discoveryToast: string | null;
+  /** 守恒量诊断实时读数（V2.0 阶段七），非实验档为 null */
+  diagnostics: DiagnosticsInfo | null;
 }
 
 const TRAIL_MAX_POINTS = 220;
@@ -137,6 +152,13 @@ export class SimulationController {
   private readonly discovered = new Set<string>();
   /** 待自动选中的新天体类型（发射航天器后选中它） */
   private pendingSelectType: string | null = null;
+
+  // —— 守恒量诊断采样（V2.0 阶段七）——
+  /** 诊断时间序列（导出 CSV 报告用）；抽稀保持有界且覆盖全程 */
+  private diagSamples: Array<[number, number, number, number, number]> = [];
+  private diagDecimate = 1;
+  private diagCounter = 0;
+  private static readonly DIAG_MAX_SAMPLES = 2000;
 
   private readonly onPointerDown = (e: PointerEvent): void => this.handlePointerDown(e);
   private readonly onPointerUp = (e: PointerEvent): void => this.handlePointerUp(e);
@@ -217,7 +239,52 @@ export class SimulationController {
       case 'prediction':
         this.onPrediction(msg.id, msg.points);
         break;
+      case 'diagnostics':
+        this.recordDiagnostics(msg);
+        break;
     }
+  }
+
+  /** 记录守恒量诊断：更新 HUD 读数并采样入时间序列（抽稀保持有界） */
+  private recordDiagnostics(msg: {
+    simYears: number;
+    energy: number;
+    angularMomentum: number;
+    energyDrift: number;
+    angularDrift: number;
+  }): void {
+    this.diagCounter++;
+    // 抽稀：仅每 diagDecimate 个采样点入库
+    if (this.diagCounter % this.diagDecimate === 0) {
+      this.diagSamples.push([
+        msg.simYears,
+        msg.energy,
+        msg.angularMomentum,
+        msg.energyDrift,
+        msg.angularDrift,
+      ]);
+      if (this.diagSamples.length >= SimulationController.DIAG_MAX_SAMPLES) {
+        // 超限则丢弃奇数下标点、采样间隔翻倍，保留全时间跨度
+        this.diagSamples = this.diagSamples.filter((_, i) => i % 2 === 0);
+        this.diagDecimate *= 2;
+      }
+    }
+    this.ui.diagnostics = {
+      simYears: msg.simYears,
+      energy: msg.energy,
+      angularMomentum: msg.angularMomentum,
+      energyDrift: msg.energyDrift,
+      angularDrift: msg.angularDrift,
+      samples: this.diagSamples.length,
+    };
+  }
+
+  /** 清空诊断采样与读数（切档/加载/进入实验档时调用） */
+  private resetDiagnostics(): void {
+    this.diagSamples = [];
+    this.diagDecimate = 1;
+    this.diagCounter = 0;
+    this.ui.diagnostics = null;
   }
 
   private onSnapshot(snap: SnapshotMessage): void {
@@ -629,6 +696,7 @@ export class SimulationController {
   loadPreset(key: string): void {
     this.ui.presetKey = key;
     this.selectBody(null);
+    this.resetDiagnostics();
     this.bridge.send({ type: 'load', state: buildPreset(key) });
     if (this.ui.timeScale > 0) this.bridge.send({ type: 'start' });
   }
@@ -647,6 +715,7 @@ export class SimulationController {
 
   setMode(mode: IntegrationMode): void {
     this.ui.mode = mode;
+    this.resetDiagnostics(); // 切档即重置守恒量采样（基线由 Worker 同步重建）
     this.bridge.send({ type: 'setMode', mode });
   }
 
@@ -745,8 +814,23 @@ export class SimulationController {
   loadState(state: WorldState, presetKey?: string): void {
     if (presetKey) this.ui.presetKey = presetKey;
     this.selectBody(null);
+    this.resetDiagnostics();
     this.bridge.send({ type: 'load', state });
     if (this.ui.timeScale > 0) this.bridge.send({ type: 'start' });
+  }
+
+  /**
+   * 导出守恒量诊断报告为 CSV 文本（V2.0 阶段七）。
+   * 列：模拟年 / 总能量 / 总角动量 / 能量漂移 / 角动量漂移。无采样时返回 null。
+   */
+  exportDiagnosticsCsv(): string | null {
+    if (this.diagSamples.length === 0) return null;
+    const header = 'sim_years,total_energy,angular_momentum,energy_drift,angular_drift';
+    const lines = this.diagSamples.map(
+      ([y, e, l, ed, ld]) =>
+        `${y.toFixed(6)},${e.toExponential(8)},${l.toExponential(8)},${ed.toExponential(6)},${ld.toExponential(6)}`,
+    );
+    return `${header}\n${lines.join('\n')}\n`;
   }
 
   /** 抓取当前画面为 PNG dataURL（下一帧渲染后回调） */

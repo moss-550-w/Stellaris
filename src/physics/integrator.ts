@@ -105,3 +105,66 @@ export function semiImplicitEulerStep(
     positions[k] += velocities[k] * dt;
   }
 }
+
+// —— RK4（经典 4 阶龙格-库塔）：实验精度档（V2.0 阶段七）——
+// 自带 4 阶精度、不依赖历史加速度，与 Verlet/欧拉档天然隔离。
+// 模块级 scratch 按需增长复用，热路径零分配（Worker 单实例，安全）。
+let rk4N = 0;
+let a1!: Float64Array, a2!: Float64Array, a3!: Float64Array, a4!: Float64Array;
+let vt1!: Float64Array, vt2!: Float64Array, vt3!: Float64Array, xt!: Float64Array;
+
+function ensureRk4(n: number): void {
+  if (n <= rk4N) return;
+  a1 = new Float64Array(n);
+  a2 = new Float64Array(n);
+  a3 = new Float64Array(n);
+  a4 = new Float64Array(n);
+  vt1 = new Float64Array(n);
+  vt2 = new Float64Array(n);
+  vt3 = new Float64Array(n);
+  xt = new Float64Array(n);
+  rk4N = n;
+}
+
+/**
+ * RK4 单步，就地更新 positions / velocities。
+ * 对二阶 ODE（pos' = vel，vel' = accel(pos)）做四级求值。
+ */
+export function rk4Step(
+  positions: Float64Array,
+  velocities: Float64Array,
+  masses: Float64Array,
+  count: number,
+  dt: number,
+): void {
+  const n = count * 3;
+  ensureRk4(n);
+  const hdt = 0.5 * dt;
+
+  // 级 1
+  computeAccelerations(positions, masses, count, a1);
+  for (let k = 0; k < n; k++) {
+    vt1[k] = velocities[k] + hdt * a1[k];
+    xt[k] = positions[k] + hdt * velocities[k];
+  }
+  // 级 2
+  computeAccelerations(xt, masses, count, a2);
+  for (let k = 0; k < n; k++) {
+    vt2[k] = velocities[k] + hdt * a2[k];
+    xt[k] = positions[k] + hdt * vt1[k];
+  }
+  // 级 3
+  computeAccelerations(xt, masses, count, a3);
+  for (let k = 0; k < n; k++) {
+    vt3[k] = velocities[k] + dt * a3[k];
+    xt[k] = positions[k] + dt * vt2[k];
+  }
+  // 级 4
+  computeAccelerations(xt, masses, count, a4);
+
+  const sixth = dt / 6;
+  for (let k = 0; k < n; k++) {
+    positions[k] += sixth * (velocities[k] + 2 * vt1[k] + 2 * vt2[k] + vt3[k]);
+    velocities[k] += sixth * (a1[k] + 2 * a2[k] + 2 * a3[k] + a4[k]);
+  }
+}
