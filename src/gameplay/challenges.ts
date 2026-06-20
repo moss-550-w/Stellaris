@@ -8,14 +8,15 @@
  *
  * 评估在主线程基于最新快照 + 元数据进行，无副作用（纯函数式 evaluate）。
  */
-import type { BodyType, IntegrationMode } from '@/physics/types';
+import type { BodyType, EvolutionStage, IntegrationMode } from '@/physics/types';
 import { habitableZone, inHabitableZone } from './habitableZone';
 
-/** 单个天体的评估视图（位置/速度来自快照，质量/类型来自 meta） */
+/** 单个天体的评估视图（位置/速度来自快照，质量/类型/阶段来自 meta） */
 export interface BodyView {
   id: number;
   type: BodyType;
   mass: number;
+  stage: EvolutionStage;
   x: number;
   y: number;
   z: number;
@@ -26,6 +27,8 @@ export interface ChallengeContext {
   bodies: BodyView[];
   mode: IntegrationMode;
   simYears: number;
+  /** 本会话累计观测到的超新星次数（控制器维护，挑战只读） */
+  supernovaeWitnessed?: number;
 }
 
 export interface ChallengeResult {
@@ -131,6 +134,31 @@ const CHALLENGES: Challenge[] = [
         progress: Math.min(1, swallowed / 3),
         done,
         reason: done ? `达成！黑洞已吞噬约 ${swallowed} 个天体` : `已吞噬约 ${swallowed} / 3 个（靠拢黑洞投喂）`,
+      };
+    },
+  },
+  {
+    key: 'witness-supernova',
+    name: '见证超新星',
+    goal: '培育一颗大质量恒星（>1.4 太阳质量），开启演化并见证其超新星爆发',
+    evaluate: (ctx) => {
+      const blocked = requireStandard(ctx);
+      if (blocked) return blocked;
+
+      const witnessed = ctx.supernovaeWitnessed ?? 0;
+      if (witnessed > 0) {
+        return { progress: 1, done: true, reason: `达成！已见证 ${witnessed} 次超新星爆发` };
+      }
+      // 大质量恒星（会经超新星）：质量 > 1.4
+      const massive = ctx.bodies.filter((b) => b.type === 'star' && b.mass > 1.4);
+      if (massive.length === 0) {
+        return { progress: 0, done: false, reason: '需要一颗 > 1.4 太阳质量的恒星' };
+      }
+      const evolving = massive.some((b) => b.stage === 'red_giant');
+      return {
+        progress: evolving ? 0.7 : 0.4,
+        done: false,
+        reason: evolving ? '恒星已进入红巨星阶段，即将爆发——开高演化倍率静候' : '已有大质量恒星，开启演化倍率推进其生命周期',
       };
     },
   },

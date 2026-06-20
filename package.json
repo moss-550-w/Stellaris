@@ -4,6 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "description": "游戏级群星运行模拟器 —— 视觉沉浸与沙盒创造为核心的游戏化太空模拟器",
+  "author": "MOSS",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",

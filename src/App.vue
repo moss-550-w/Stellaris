@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, reactive } from 'vue';
-import { SimulationController, type SimUIState } from '@/gameplay/SimulationController';
+import { SimulationController, DEFAULT_EVOLUTION_INDEX, type SimUIState } from '@/gameplay/SimulationController';
 import Toolbar from '@/ui/Toolbar.vue';
 import ControlPanel from '@/ui/ControlPanel.vue';
 import EditorPanel from '@/ui/EditorPanel.vue';
@@ -41,6 +41,7 @@ const ui = reactive<SimUIState>({
   energy: null,
   challengeKey: null,
   challenge: null,
+  evolutionIndex: DEFAULT_EVOLUTION_INDEX,
 });
 
 let controller: SimulationController | null = null;
@@ -58,6 +59,7 @@ const nowIso = (): string => new Date().toISOString();
 const stamp = (): string => nowIso().replace(/[:T]/g, '-').slice(0, 19);
 
 const onSelect = (i: number): void => controller?.setScaleIndex(i);
+const onEvolution = (i: number): void => controller?.setEvolutionIndex(i);
 const onLoad = (key: string): void => controller?.loadPreset(key);
 const onMode = (m: IntegrationMode): void => controller?.setMode(m);
 const onQuality = (q: QualityLevel): void => controller?.setQuality(q);
@@ -130,7 +132,7 @@ function onGuide(): void {
   />
   <ChallengePanel :state="ui" @select="onChallenge" />
   <EditorPanel :state="ui" @edit="onEdit" @remove="onRemove" @close="onCloseEditor" />
-  <ControlPanel :state="ui" @select="onSelect" />
+  <ControlPanel :state="ui" @select="onSelect" @evolution="onEvolution" />
 
   <Onboarding ref="onboarding" />
   <p class="hint">点击天体选中编辑 · 拖拽旋转视角 · 滚轮缩放</p>

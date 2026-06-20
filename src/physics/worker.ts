@@ -101,8 +101,16 @@ function loop(): void {
   for (let s = 0; s < steps; s++) {
     world.step(dt);
   }
-  world.simYears += steps * dt;
+  const advanced = steps * dt;
+  world.simYears += advanced;
   tick += steps;
+
+  // 演化步进（低频，按演化倍率推进恒星年龄）；阶段跃迁可能改变外观/类型
+  const evoEvents = world.evolveStep(advanced * world.evolutionScale);
+  if (evoEvents.length > 0) {
+    emitBodies(); // 外观/类型已变，先更新 mesh 映射
+    ctx.postMessage({ kind: 'evolution', events: evoEvents });
+  }
 
   // 每 tick 检测一次碰撞（粒度足够，避免逐子步开销）
   const events = world.handleCollisions();
@@ -159,6 +167,10 @@ ctx.onmessage = (e: MessageEvent<PhysicsCommand>): void => {
 
     case 'setMode':
       world.setMode(cmd.mode);
+      break;
+
+    case 'setEvolutionScale':
+      world.evolutionScale = cmd.scale;
       break;
 
     case 'addBody':

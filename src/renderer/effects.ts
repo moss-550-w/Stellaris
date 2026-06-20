@@ -1,11 +1,12 @@
 /**
- * 渲染表现层 —— 碰撞特效
+ * 渲染表现层 —— 碰撞 / 演化特效
  *
- * 阶段二用加性混合 sprite 做一次性闪光：合并/撕裂为短促光球，毁灭/超新星为更大更久的爆发。
- * 完整碎片场与冲击波留待阶段三视觉打磨。
+ * 加性混合 sprite 一次性闪光：合并/撕裂为短促光球，毁灭/超新星为更大更久的爆发；
+ * 演化阶段跃迁（超新星爆发、遗骸诞生）复用同一闪光机制。
+ * 完整碎片场与冲击波留待后续视觉打磨。
  */
 import * as THREE from 'three';
-import type { CollisionEvent } from '@/physics/types';
+import type { CollisionEvent, EvolutionEvent } from '@/physics/types';
 import { generateGlowTexture } from './proceduralTexture';
 
 interface Flash {
@@ -25,22 +26,35 @@ export class CollisionEffects {
     scene.add(this.group);
   }
 
-  spawn(ev: CollisionEvent): void {
-    const big = ev.kind === 'destroy' || ev.kind === 'supernova';
+  /** 底层闪光：在位置生成一次加性光球 */
+  private flash(x: number, y: number, z: number, color: number, baseScale: number, life: number): void {
     const sprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: this.texture,
-        color: ev.color,
+        color,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         transparent: true,
       }),
     );
-    sprite.position.set(ev.x, ev.y, ev.z);
-    const baseScale = ev.radius * (big ? 18 : 6);
+    sprite.position.set(x, y, z);
     sprite.scale.setScalar(baseScale * 0.3);
     this.group.add(sprite);
-    this.active.push({ sprite, age: 0, life: big ? 1.1 : 0.5, baseScale });
+    this.active.push({ sprite, age: 0, life, baseScale });
+  }
+
+  spawn(ev: CollisionEvent): void {
+    const big = ev.kind === 'destroy' || ev.kind === 'supernova';
+    this.flash(ev.x, ev.y, ev.z, ev.color, ev.radius * (big ? 18 : 6), big ? 1.1 : 0.5);
+  }
+
+  /** 演化跃迁特效：超新星为大而久的金白爆发，其它跃迁为温和闪现 */
+  spawnEvolution(ev: EvolutionEvent): void {
+    if (ev.supernova) {
+      this.flash(ev.x, ev.y, ev.z, 0xfff0c0, ev.radius * 24, 1.4);
+    } else {
+      this.flash(ev.x, ev.y, ev.z, ev.color, ev.radius * 7, 0.7);
+    }
   }
 
   update(dt: number): void {

@@ -14,6 +14,15 @@ const emit = defineEmits<{
 const scienceOpen = ref(false);
 
 const TYPE_LABELS: Record<BodyType, string> = { star: '恒星', rocky: '岩质', gas: '气态', blackhole: '黑洞' };
+const STAGE_LABELS: Record<string, string> = {
+  none: '',
+  main_sequence: '主序星',
+  red_giant: '红巨星',
+  supernova: '超新星',
+  white_dwarf: '白矮星',
+  neutron_star: '中子星',
+  black_hole: '黑洞',
+};
 const SWATCHES = [0xfff1cf, 0xffd9a0, 0x5b86b5, 0x76c08a, 0xc1654a, 0xc2b184, 0xa9c8ff, 0xd8b070];
 
 // 本地编辑缓冲（仅在选中目标切换时重置，避免运行中被实时数据覆盖）
@@ -89,6 +98,14 @@ const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
         <input type="number" v-model.number="vy" step="0.1" @change="emit('edit', { vy })" />
         <input type="number" v-model.number="vz" step="0.1" @change="emit('edit', { vz })" />
       </div>
+    </div>
+
+    <div v-if="state.selected.stage !== 'none'" class="evolution">
+      <span class="stage-badge">{{ STAGE_LABELS[state.selected.stage] }}</span>
+      <span v-if="state.selected.remainingLife >= 0" class="life">
+        距下一阶段 {{ state.selected.remainingLife.toFixed(0) }} 演化年
+      </span>
+      <span v-else class="life stable">演化终态 · 稳定</span>
     </div>
 
     <div class="readout">
@@ -213,6 +230,27 @@ const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
   font-size: 11px;
   opacity: 0.65;
   line-height: 1.5;
+}
+.evolution {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.stage-badge {
+  padding: 2px 9px;
+  border-radius: 6px;
+  background: rgba(255, 160, 80, 0.18);
+  color: #ffb066;
+  font-size: 11px;
+  font-weight: 600;
+}
+.life {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.life.stable {
+  color: #a9c8ff;
 }
 .energy {
   padding: 8px 10px;

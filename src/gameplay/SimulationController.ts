@@ -18,6 +18,7 @@ import { PhysicsBridge } from '@/physics/bridge';
 import type {
   BodyMeta,
   BodyPatch,
+  EvolutionStage,
   IntegrationMode,
   PhysicsOutbound,
   SnapshotMessage,
@@ -35,6 +36,10 @@ import { QUALITY_PROFILES, type QualityLevel } from '@/store/settings';
 /** 引力透镜：正对黑洞夹角阈值（度），小于此角启用全屏偏折 */
 const LENS_FULL_ANGLE_DEG = 15;
 
+/** 演化倍率档位（0 = 冻结演化）。配合感知时间，使恒星生命周期在可感知窗内可见。 */
+export const EVOLUTION_SCALES = [0, 1, 10, 50, 200] as const;
+export const DEFAULT_EVOLUTION_INDEX = 1;
+
 export interface SelectedInfo {
   id: number;
   type: string;
@@ -48,6 +53,10 @@ export interface SelectedInfo {
   vy: number;
   vz: number;
   speed: number;
+  /** 演化阶段（V2.0 阶段五） */
+  stage: EvolutionStage;
+  /** 剩余寿命（演化年，−1 表示稳定） */
+  remainingLife: number;
 }
 
 export interface SimUIState {
@@ -68,6 +77,8 @@ export interface SimUIState {
   energy: EnergyReading | null;
   challengeKey: string | null;
   challenge: ChallengeResult | null;
+  /** 演化倍率档位索引（V2.0 阶段五） */
+  evolutionIndex: number;
 }
 
 const TRAIL_MAX_POINTS = 220;
@@ -110,6 +121,8 @@ export class SimulationController {
   private nextSeed = 1000;
   private fpsFrames = 0;
   private fpsElapsed = 0;
+  /** 本会话累计观测到的超新星次数（供挑战判定） */
+  private supernovaeWitnessed = 0;
 
   private readonly onPointerDown = (e: PointerEvent): void => this.handlePointerDown(e);
   private readonly onPointerUp = (e: PointerEvent): void => this.handlePointerUp(e);
@@ -159,6 +172,7 @@ export class SimulationController {
     el.addEventListener('pointerup', this.onPointerUp);
 
     this.setScaleIndex(DEFAULT_SCALE_INDEX);
+    this.setEvolutionIndex(this.ui.evolutionIndex);
   }
 
   // —— 消息处理 ——
@@ -179,6 +193,12 @@ export class SimulationController {
         break;
       case 'collision':
         for (const ev of msg.events) this.effects.spawn(ev);
+        break;
+      case 'evolution':
+        for (const ev of msg.events) {
+          this.effects.spawnEvolution(ev);
+          if (ev.supernova) this.supernovaeWitnessed++;
+        }
         break;
       case 'prediction':
         this.onPrediction(msg.id, msg.points);
@@ -431,13 +451,19 @@ export class SimulationController {
         id,
         type: meta.type,
         mass: meta.mass,
+        stage: meta.stage,
         x: snap.positions[base] + vx * elapsedSim,
         y: snap.positions[base + 1] + vy * elapsedSim,
         z: snap.positions[base + 2] + vz * elapsedSim,
         speed: Math.sqrt(vx * vx + vy * vy + vz * vz),
       });
     }
-    this.ui.challenge = challenge.evaluate({ bodies: views, mode: snap.mode, simYears: snap.simYears });
+    this.ui.challenge = challenge.evaluate({
+      bodies: views,
+      mode: snap.mode,
+      simYears: snap.simYears,
+      supernovaeWitnessed: this.supernovaeWitnessed,
+    });
   }
 
   private updateSelectionInfo(snap: SnapshotMessage, elapsedSim: number): void {
@@ -466,6 +492,8 @@ export class SimulationController {
       color: meta.color,
       x, y, z, vx, vy, vz,
       speed: Math.sqrt(vx * vx + vy * vy + vz * vz),
+      stage: meta.stage,
+      remainingLife: meta.remainingLife,
     };
   }
 
@@ -564,6 +592,12 @@ export class SimulationController {
   setQuality(level: QualityLevel): void {
     this.ui.quality = level;
     this.renderer.setQuality(level);
+  }
+
+  /** 切换演化倍率档（0 = 冻结演化） */
+  setEvolutionIndex(index: number): void {
+    this.ui.evolutionIndex = index;
+    this.bridge.send({ type: 'setEvolutionScale', scale: EVOLUTION_SCALES[index] });
   }
 
   setChallenge(key: string | null): void {

@@ -14,6 +14,20 @@ export type BodyType = 'star' | 'rocky' | 'gas' | 'blackhole';
 /** 积分精度档：fluid = 流畅(半隐式欧拉)，standard = 标准(velocity Verlet) */
 export type IntegrationMode = 'fluid' | 'standard';
 
+/**
+ * 演化阶段（V2.0 阶段五）。
+ * 恒星：main_sequence → red_giant → {white_dwarf | neutron_star | black_hole}；
+ * supernova 为瞬态闪现阶段；none 表示非恒星（不演化）。
+ */
+export type EvolutionStage =
+  | 'none'
+  | 'main_sequence'
+  | 'red_giant'
+  | 'supernova'
+  | 'white_dwarf'
+  | 'neutron_star'
+  | 'black_hole';
+
 /** 新增天体规格（不含 id，由 Worker 分配） */
 export interface NewBody {
   type: BodyType;
@@ -28,6 +42,12 @@ export interface NewBody {
   vx: number;
   vy: number;
   vz: number;
+  /** 演化年龄（演化时钟，年）。可选——旧存档/新建默认 0 */
+  age?: number;
+  /** 演化阶段。可选——旧存档默认按类型推断 */
+  stage?: EvolutionStage;
+  /** 主序基准半径（演化各阶段以此为基缩放）。可选——默认等于 radius */
+  baseRadius?: number;
 }
 
 /** 完整序列化天体 */
@@ -43,6 +63,12 @@ export interface BodyMeta {
   radius: number;
   color: number;
   seed: number;
+  /** 演化阶段（渲染按此切换外观） */
+  stage: EvolutionStage;
+  /** 演化年龄（年） */
+  age: number;
+  /** 剩余寿命（年，−1 表示稳定/不再演化），供信息卡展示 */
+  remainingLife: number;
 }
 
 /** 可编辑字段补丁 */
@@ -54,11 +80,27 @@ export interface WorldState {
   simYears: number;
   nextId: number;
   rngState: number;
+  /** 演化倍率（独立于物理 timeScale）。可选——旧存档默认 1 */
+  evolutionScale?: number;
 }
 
 /** 碰撞事件（供特效/提示） */
 export interface CollisionEvent {
   kind: 'merge' | 'tear' | 'destroy' | 'supernova';
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  color: number;
+}
+
+/** 演化阶段跃迁事件（供特效/提示），V2.0 阶段五 */
+export interface EvolutionEvent {
+  id: number;
+  from: EvolutionStage;
+  to: EvolutionStage;
+  /** 是否伴随超新星爆发（大质量恒星走向遗骸时），用于触发爆发特效 */
+  supernova: boolean;
   x: number;
   y: number;
   z: number;
@@ -79,6 +121,7 @@ export type PhysicsCommand =
   | { type: 'undo' }
   | { type: 'redo' }
   | { type: 'predict'; id: number; years: number; samples: number }
+  | { type: 'setEvolutionScale'; scale: number }
   | { type: 'ping' };
 
 // —— Worker → 主线程 ——
@@ -109,6 +152,11 @@ export interface CollisionMessage {
   events: CollisionEvent[];
 }
 
+export interface EvolutionMessage {
+  kind: 'evolution';
+  events: EvolutionEvent[];
+}
+
 export interface PredictionMessage {
   kind: 'prediction';
   id: number;
@@ -123,5 +171,6 @@ export type PhysicsOutbound =
   | BodiesMessage
   | SnapshotMessage
   | CollisionMessage
+  | EvolutionMessage
   | PredictionMessage
   | PongMessage;

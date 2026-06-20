@@ -8,7 +8,9 @@ import type { WorldState } from '@/physics/types';
 
 const STORAGE_PREFIX = 'stellaris.save.';
 const SLOT_INDEX_KEY = 'stellaris.saves';
-const SAVE_VERSION = 1;
+// 版本 2：V2.0 阶段五新增天体演化字段（age/stage/baseRadius）与 evolutionScale。
+// 旧版本 1 存档无这些字段，load 时由 World/normalize 补默认，保持向下兼容。
+const SAVE_VERSION = 2;
 
 export interface SaveFile {
   version: number;

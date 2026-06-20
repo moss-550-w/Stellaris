@@ -8,17 +8,30 @@
 import { PRNG } from '@/core/prng';
 import { computeAccelerations, verletStep, semiImplicitEulerStep } from './integrator';
 import { classifyCollision } from './collision';
+import {
+  stageFor,
+  remainingLife,
+  appearanceFor,
+  goesSupernova,
+} from './evolution';
 import type {
   BodyMeta,
   BodyPatch,
   BodyType,
   CollisionEvent,
+  EvolutionEvent,
+  EvolutionStage,
   IntegrationMode,
   NewBody,
   SerializedBody,
   WorldState,
 } from './types';
 import { STRIDE } from './types';
+
+/** 初始阶段：恒星从主序起，其它类型不演化 */
+function initialStage(type: BodyType): EvolutionStage {
+  return type === 'star' ? 'main_sequence' : 'none';
+}
 
 const INITIAL_CAPACITY = 64;
 
@@ -45,12 +58,17 @@ export class World {
   types: BodyType[] = [];
   colors: number[] = [];
   seeds: number[] = [];
+  // 演化状态（平行数组，V2.0 阶段五）
+  ages: number[] = [];
+  stages: EvolutionStage[] = [];
+  baseRadii: number[] = [];
 
   count = 0;
   capacity: number;
   nextId = 1;
   simYears = 0;
   mode: IntegrationMode = 'fluid';
+  evolutionScale = 1;
   readonly rng = new PRNG(0x9e3779b9);
 
   private accOld: Float64Array;
@@ -117,6 +135,9 @@ export class World {
     this.types[i] = b.type;
     this.colors[i] = b.color;
     this.seeds[i] = b.seed;
+    this.ages[i] = b.age ?? 0;
+    this.stages[i] = b.stage ?? initialStage(b.type);
+    this.baseRadii[i] = b.baseRadius ?? b.radius;
     this.count++;
     this.recomputeAcc();
     return id;
@@ -145,11 +166,17 @@ export class World {
       this.types[i] = this.types[last];
       this.colors[i] = this.colors[last];
       this.seeds[i] = this.seeds[last];
+      this.ages[i] = this.ages[last];
+      this.stages[i] = this.stages[last];
+      this.baseRadii[i] = this.baseRadii[last];
     }
     this.count = last;
     this.types.length = last;
     this.colors.length = last;
     this.seeds.length = last;
+    this.ages.length = last;
+    this.stages.length = last;
+    this.baseRadii.length = last;
   }
 
   editBody(id: number, patch: BodyPatch): boolean {
@@ -163,8 +190,16 @@ export class World {
     if (patch.vy !== undefined) this.velocities[o + 1] = patch.vy;
     if (patch.vz !== undefined) this.velocities[o + 2] = patch.vz;
     if (patch.mass !== undefined) this.masses[i] = patch.mass;
-    if (patch.radius !== undefined) this.radii[i] = patch.radius;
-    if (patch.type !== undefined) this.types[i] = patch.type;
+    if (patch.radius !== undefined) {
+      this.radii[i] = patch.radius;
+      this.baseRadii[i] = patch.radius; // 手动改半径即重设演化基准
+    }
+    if (patch.type !== undefined) {
+      this.types[i] = patch.type;
+      // 切换为/离开恒星时重置演化状态
+      this.stages[i] = initialStage(patch.type);
+      this.ages[i] = 0;
+    }
     if (patch.color !== undefined) this.colors[i] = patch.color;
     this.recomputeAcc();
     return true;
@@ -187,6 +222,57 @@ export class World {
     if (mode === this.mode) return;
     this.mode = mode;
     this.recomputeAcc(); // 切档后重置 Verlet 所需的当前加速度
+  }
+
+  /**
+   * 演化步进：按 dtYears（已乘演化倍率）推进每颗恒星年龄，检测阶段跃迁并应用外观。
+   * 阶段跃迁为**原子**操作（直接落定到目标阶段），不引入瞬态 body 状态，
+   * 从而对碰撞 swap-remove 索引变化天然安全。超新星通过事件 supernova 标记触发爆发特效。
+   * 返回本步发生的跃迁事件。
+   */
+  evolveStep(dtYears: number): EvolutionEvent[] {
+    if (dtYears <= 0) return [];
+    const events: EvolutionEvent[] = [];
+
+    for (let i = 0; i < this.count; i++) {
+      const stage = this.stages[i];
+      // 非恒星、或已到稳定遗骸阶段：不推进
+      if (stage !== 'main_sequence' && stage !== 'red_giant') continue;
+
+      this.ages[i] += dtYears;
+      const next = stageFor(this.masses[i], this.ages[i]);
+      if (next === stage) continue;
+
+      const isRemnant = next === 'white_dwarf' || next === 'neutron_star' || next === 'black_hole';
+      const supernova = isRemnant && goesSupernova(this.masses[i]);
+      this.applyStage(i, next);
+      events.push(this.makeEvent(i, stage, next, supernova));
+    }
+    return events;
+  }
+
+  /** 应用阶段外观（半径/颜色/类型） */
+  private applyStage(i: number, stage: EvolutionStage): void {
+    const look = appearanceFor(stage);
+    this.stages[i] = stage;
+    this.radii[i] = this.baseRadii[i] * look.radiusScale;
+    if (look.color !== undefined) this.colors[i] = look.color;
+    if (look.type !== undefined) this.types[i] = look.type;
+  }
+
+  private makeEvent(i: number, from: EvolutionStage, to: EvolutionStage, supernova: boolean): EvolutionEvent {
+    const o = i * STRIDE;
+    return {
+      id: this.ids[i],
+      from,
+      to,
+      supernova,
+      x: this.positions[o],
+      y: this.positions[o + 1],
+      z: this.positions[o + 2],
+      radius: this.radii[i],
+      color: this.colors[i],
+    };
   }
 
   /**
@@ -290,6 +376,9 @@ export class World {
     this.types.length = 0;
     this.colors.length = 0;
     this.seeds.length = 0;
+    this.ages.length = 0;
+    this.stages.length = 0;
+    this.baseRadii.length = 0;
     for (const b of state.bodies) {
       const i = this.count;
       const o = i * STRIDE;
@@ -305,10 +394,15 @@ export class World {
       this.types[i] = b.type;
       this.colors[i] = b.color;
       this.seeds[i] = b.seed;
+      // 演化字段：旧存档（V1.0，无这些字段）补默认，向下兼容
+      this.ages[i] = b.age ?? 0;
+      this.stages[i] = b.stage ?? initialStage(b.type);
+      this.baseRadii[i] = b.baseRadius ?? b.radius;
       this.count++;
     }
     this.simYears = state.simYears;
     this.nextId = state.nextId;
+    this.evolutionScale = state.evolutionScale ?? 1;
     this.rng.setState(state.rngState);
     this.recomputeAcc();
   }
@@ -330,14 +424,24 @@ export class World {
         vx: this.velocities[o],
         vy: this.velocities[o + 1],
         vz: this.velocities[o + 2],
+        age: this.ages[i],
+        stage: this.stages[i],
+        baseRadius: this.baseRadii[i],
       });
     }
-    return { bodies, simYears: this.simYears, nextId: this.nextId, rngState: this.rng.getState() };
+    return {
+      bodies,
+      simYears: this.simYears,
+      nextId: this.nextId,
+      rngState: this.rng.getState(),
+      evolutionScale: this.evolutionScale,
+    };
   }
 
   metas(): BodyMeta[] {
     const out: BodyMeta[] = [];
     for (let i = 0; i < this.count; i++) {
+      const stage = this.stages[i];
       out.push({
         id: this.ids[i],
         type: this.types[i],
@@ -345,6 +449,9 @@ export class World {
         radius: this.radii[i],
         color: this.colors[i],
         seed: this.seeds[i],
+        stage,
+        age: this.ages[i],
+        remainingLife: remainingLife(this.masses[i], this.ages[i], stage),
       });
     }
     return out;
