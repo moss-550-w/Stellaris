@@ -83,3 +83,25 @@ export function verletStep(
   // 新加速度成为下一步的旧加速度
   accOld.set(accNew);
 }
+
+/**
+ * 半隐式（辛）欧拉单步 —— 流畅模式核心。
+ * 每步仅一次加速度计算，先用当前加速度更新速度，再用新速度更新位置；
+ * 相比显式欧拉具备半辛性质，长期能量更稳定，性能优于 Verlet，利于支撑更多天体。
+ * acc 为复用的临时缓冲。
+ */
+export function semiImplicitEulerStep(
+  positions: Float64Array,
+  velocities: Float64Array,
+  masses: Float64Array,
+  count: number,
+  dt: number,
+  acc: Float64Array,
+): void {
+  computeAccelerations(positions, masses, count, acc);
+  const n = count * 3;
+  for (let k = 0; k < n; k++) {
+    velocities[k] += acc[k] * dt;
+    positions[k] += velocities[k] * dt;
+  }
+}

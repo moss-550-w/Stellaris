@@ -1,103 +1,92 @@
 /**
- * 物理仿真层 —— Web Worker 入口（阶段一：单恒星系统）
+ * 物理仿真层 —— Web Worker 入口（阶段二：可玩沙盒）
  *
  * 职责：
- * - 持有天体状态，按固定步长执行 velocity Verlet 全 N 体积分；
- * - accumulator 主循环：依据感知时间将真实流逝时间换算为模拟年推进量；
- * - 高倍率（>1000×）自动放大步长并限制步数，触发「细节省略」；
- * - 每个物理 tick 产出一份快照（位置 + 速度），以 Transferable 零拷贝回传主线程。
+ * - 持有权威 World，按精度档执行 accumulator 主循环；
+ * - 处理动态编辑（增删改/加载预设）与碰撞演化；
+ * - 内聚撤销/重做（完整 WorldState 栈，上限 20），消除主线程异步时序问题；
+ * - 响应轨道预测请求；
+ * - 每个物理 tick 以 Transferable 零拷贝回传快照（id + 位置 + 速度）。
  */
-import type { PhysicsCommand, PhysicsOutbound, PhysicsSnapshot, BodyInitData } from './types';
+import type { PhysicsCommand, PhysicsOutbound, SnapshotMessage, WorldState } from './types';
 import { STRIDE } from './types';
 import { FIXED_DT_YEARS, MAX_STEPS_PER_TICK } from './constants';
-import { computeAccelerations, verletStep } from './integrator';
 import { realSecondsToSimYears, HIGH_SPEED_THRESHOLD } from '@/core/time';
+import { World, predictTrajectory } from './world';
 
-// 规避 DOM 与 WebWorker lib 的全局类型冲突：对 worker 全局做最小化类型断言
 const ctx = self as unknown as {
   onmessage: ((e: MessageEvent<PhysicsCommand>) => void) | null;
   postMessage(message: PhysicsOutbound, transfer?: Transferable[]): void;
 };
 
-interface SimState {
-  count: number;
-  masses: Float64Array;
-  positions: Float64Array;
-  velocities: Float64Array;
-  accOld: Float64Array;
-  accNew: Float64Array;
-  running: boolean;
-  timeScale: number;
-  simYears: number;
-  tick: number;
-  lastReal: number;
-  timer: number | null;
+const world = new World();
+let running = false;
+let timeScale = 1;
+let tick = 0;
+let lastReal = 0;
+let timer: number | null = null;
+
+const HISTORY_LIMIT = 20;
+const undoStack: WorldState[] = [];
+const redoStack: WorldState[] = [];
+
+const TICK_MS = 16;
+const PREDICT_DT = FIXED_DT_YEARS;
+
+function pushHistory(): void {
+  undoStack.push(world.serialize());
+  if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+  redoStack.length = 0;
 }
 
-let state: SimState | null = null;
-
-/** 主循环间隔（毫秒），约等于 60Hz */
-const TICK_MS = 16;
-
-function init(data: BodyInitData): void {
-  const { count } = data;
-  const n = count * STRIDE;
-  // init 数据经 Transferable 转移，所有权已归 Worker，直接持有
-  const positions = data.positions;
-  const velocities = data.velocities;
-  const masses = data.masses;
-  const accOld = new Float64Array(n);
-  const accNew = new Float64Array(n);
-  computeAccelerations(positions, masses, count, accOld);
-
-  state = {
-    count,
-    masses,
-    positions,
-    velocities,
-    accOld,
-    accNew,
-    running: false,
-    timeScale: 1,
-    simYears: 0,
-    tick: 0,
-    lastReal: 0,
-    timer: null,
-  };
-  emitSnapshot(false); // 初始帧，渲染端立即就位
+function emitBodies(): void {
+  ctx.postMessage({
+    kind: 'bodies',
+    metas: world.metas(),
+    canUndo: undoStack.length > 0,
+    canRedo: redoStack.length > 0,
+  });
 }
 
 function emitSnapshot(detailOmitted: boolean): void {
-  if (!state) return;
-  const n = state.count * STRIDE;
-  // 双缓冲思想：每帧产出独立的传输缓冲，Float64 计算结果收窄为 Float32 传输
+  const count = world.count;
+  const n = count * STRIDE;
+  const ids = new Int32Array(count);
+  ids.set(world.ids.subarray(0, count));
   const positions = new Float32Array(n);
+  positions.set(world.positions.subarray(0, n));
   const velocities = new Float32Array(n);
-  positions.set(state.positions);
-  velocities.set(state.velocities);
+  velocities.set(world.velocities.subarray(0, n));
 
-  const snapshot: PhysicsSnapshot = {
+  const snapshot: SnapshotMessage = {
     kind: 'snapshot',
-    tick: state.tick,
-    simYears: state.simYears,
-    bodyCount: state.count,
+    tick,
+    simYears: world.simYears,
+    count,
+    mode: world.mode,
+    detailOmitted,
+    ids,
     positions,
     velocities,
-    detailOmitted,
   };
-  // 转移 buffer 所有权，零拷贝
-  ctx.postMessage(snapshot, [positions.buffer, velocities.buffer]);
+  ctx.postMessage(snapshot, [ids.buffer, positions.buffer, velocities.buffer]);
+}
+
+/** 编辑/碰撞/撤销后刷新渲染端（集合 + 一帧位置） */
+function refresh(): void {
+  emitBodies();
+  emitSnapshot(false);
 }
 
 function loop(): void {
-  if (!state || !state.running) return;
+  if (!running) return;
 
   const now = performance.now();
-  let realDt = (now - state.lastReal) / 1000;
-  state.lastReal = now;
-  if (realDt > 0.1) realDt = 0.1; // 卡顿/切后台保护，避免一次推进过多
+  let realDt = (now - lastReal) / 1000;
+  lastReal = now;
+  if (realDt > 0.1) realDt = 0.1;
 
-  const advanceYears = realSecondsToSimYears(realDt, state.timeScale);
+  const advanceYears = realSecondsToSimYears(realDt, timeScale);
 
   let dt = FIXED_DT_YEARS;
   let steps = Math.round(advanceYears / dt);
@@ -105,36 +94,39 @@ function loop(): void {
 
   if (steps > MAX_STEPS_PER_TICK) {
     detailOmitted = true;
-    if (state.timeScale > HIGH_SPEED_THRESHOLD) {
-      // 高速：放大单步步长，固定步数上限（牺牲精度换取稳定与性能）
-      dt = advanceYears / MAX_STEPS_PER_TICK;
-    }
+    if (timeScale > HIGH_SPEED_THRESHOLD) dt = advanceYears / MAX_STEPS_PER_TICK;
     steps = MAX_STEPS_PER_TICK;
   }
 
   for (let s = 0; s < steps; s++) {
-    verletStep(state.positions, state.velocities, state.masses, state.count, dt, state.accOld, state.accNew);
+    world.step(dt);
   }
-  state.simYears += steps * dt;
-  state.tick += steps;
+  world.simYears += steps * dt;
+  tick += steps;
+
+  // 每 tick 检测一次碰撞（粒度足够，避免逐子步开销）
+  const events = world.handleCollisions();
+  if (events.length > 0) {
+    emitBodies(); // 集合已变，先更新 mesh 映射
+    ctx.postMessage({ kind: 'collision', events });
+  }
 
   emitSnapshot(detailOmitted);
-  state.timer = self.setTimeout(loop, TICK_MS);
+  timer = self.setTimeout(loop, TICK_MS);
 }
 
 function startLoop(): void {
-  if (!state || state.running) return;
-  state.running = true;
-  state.lastReal = performance.now();
+  if (running || world.count === 0) return;
+  running = true;
+  lastReal = performance.now();
   loop();
 }
 
 function stopLoop(): void {
-  if (!state) return;
-  state.running = false;
-  if (state.timer !== null) {
-    self.clearTimeout(state.timer);
-    state.timer = null;
+  running = false;
+  if (timer !== null) {
+    self.clearTimeout(timer);
+    timer = null;
   }
 }
 
@@ -144,17 +136,71 @@ ctx.onmessage = (e: MessageEvent<PhysicsCommand>): void => {
     case 'ping':
       ctx.postMessage({ kind: 'pong' });
       break;
-    case 'init':
-      init(cmd.data);
+
+    case 'load':
+      // 加载视为可撤销操作（若已有内容）
+      if (world.count > 0) pushHistory();
+      world.load(cmd.state);
+      tick = 0;
+      refresh();
       break;
+
     case 'start':
       startLoop();
       break;
+
     case 'pause':
       stopLoop();
       break;
+
     case 'setTimeScale':
-      if (state) state.timeScale = cmd.scale;
+      timeScale = cmd.scale;
       break;
+
+    case 'setMode':
+      world.setMode(cmd.mode);
+      break;
+
+    case 'addBody':
+      pushHistory();
+      world.addBody(cmd.body);
+      refresh();
+      break;
+
+    case 'removeBody':
+      pushHistory();
+      world.removeById(cmd.id);
+      refresh();
+      break;
+
+    case 'editBody':
+      pushHistory();
+      world.editBody(cmd.id, cmd.patch);
+      refresh();
+      break;
+
+    case 'undo':
+      if (undoStack.length > 0) {
+        redoStack.push(world.serialize());
+        const prev = undoStack.pop() as WorldState;
+        world.load(prev);
+        refresh();
+      }
+      break;
+
+    case 'redo':
+      if (redoStack.length > 0) {
+        undoStack.push(world.serialize());
+        const next = redoStack.pop() as WorldState;
+        world.load(next);
+        refresh();
+      }
+      break;
+
+    case 'predict': {
+      const points = predictTrajectory(world, cmd.id, cmd.years, cmd.samples, PREDICT_DT);
+      ctx.postMessage({ kind: 'prediction', id: cmd.id, points }, [points.buffer]);
+      break;
+    }
   }
 };

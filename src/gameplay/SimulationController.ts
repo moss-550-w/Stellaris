@@ -1,195 +1,322 @@
 /**
- * 玩法交互层 —— 仿真编排控制器
+ * 玩法交互层 —— 仿真编排控制器（阶段二：可玩沙盒）
  *
- * 统筹渲染表现层(SceneRenderer)、物理仿真层(PhysicsBridge)与感知时间状态：
- * - 由预设构建场景对象并初始化 Worker；
- * - 每渲染帧基于「最新快照 + 速度」做一阶外推，消除 Worker 通信延迟与帧率差；
- * - 维护轨迹线、FPS 与对 UI 的响应式状态。
+ * 统筹渲染表现层、物理仿真层与交互状态：
+ * - 按 id 增量同步 mesh/trail（处理增删/碰撞/编辑/撤销）；
+ * - 每帧基于「最新快照 + 速度」一阶外推；
+ * - raycaster 点击拾取 → 选中、显示编辑器与轨道预测；
+ * - 碰撞特效、FPS、对 UI 的响应式状态。
  */
 import * as THREE from 'three';
-import { reactive } from 'vue';
 import { SceneRenderer } from '@/renderer/SceneRenderer';
-import { createStar, createPlanet, createStarfield } from '@/renderer/CelestialFactory';
+import { createBody, createStarfield } from '@/renderer/CelestialFactory';
+import { CollisionEffects } from '@/renderer/effects';
 import { PhysicsBridge } from '@/physics/bridge';
-import type { PhysicsOutbound, PhysicsSnapshot } from '@/physics/types';
+import type {
+  BodyMeta,
+  BodyPatch,
+  IntegrationMode,
+  PhysicsOutbound,
+  SnapshotMessage,
+} from '@/physics/types';
 import { STRIDE } from '@/physics/types';
-import { SOLAR_PRESET, buildInitData, type BodySpec } from './presets';
+import { PRESETS, buildPreset, makeDefaultBody } from './presets';
 import { TIME_SCALES, DEFAULT_SCALE_INDEX, realSecondsToSimYears } from '@/core/time';
 
+export interface SelectedInfo {
+  id: number;
+  type: string;
+  mass: number;
+  radius: number;
+  color: number;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  speed: number;
+}
+
 export interface SimUIState {
-  systemName: string;
+  presetKey: string;
   simYears: number;
   scaleIndex: number;
   timeScale: number;
   detailOmitted: boolean;
   connected: boolean;
   fps: number;
+  mode: IntegrationMode;
+  count: number;
+  canUndo: boolean;
+  canRedo: boolean;
+  selectedId: number | null;
+  selected: SelectedInfo | null;
 }
 
 const TRAIL_MAX_POINTS = 220;
-/** 外推用的真实时间上限（秒），防止切后台后位置飞出 */
 const MAX_EXTRAPOLATE_SECONDS = 0.05;
+const PREDICT_YEARS = 2.5;
+const PREDICT_SAMPLES = 120;
+const PREDICT_INTERVAL = 0.5; // 秒
+
+interface Trail {
+  line: THREE.Line;
+  data: Float32Array;
+  count: number;
+}
 
 export class SimulationController {
   readonly ui: SimUIState;
 
   private readonly renderer: SceneRenderer;
   private readonly bridge: PhysicsBridge;
-  private readonly specs: BodySpec[];
-  private readonly bodies: THREE.Object3D[] = [];
+  private readonly effects: CollisionEffects;
 
-  // 轨迹线（仅行星，索引对齐 specs[1..]）
-  private readonly trailGeoms: THREE.BufferGeometry[] = [];
-  private readonly trailData: Float32Array[] = [];
-  private readonly trailCounts: number[] = [];
+  private readonly metaMap = new Map<number, BodyMeta>();
+  private readonly meshMap = new Map<number, THREE.Object3D>();
+  private readonly trailMap = new Map<number, Trail>();
 
-  private latest: PhysicsSnapshot | null = null;
+  private latest: SnapshotMessage | null = null;
   private latestRecvReal = 0;
+  private readonly idIndex = new Map<number, number>();
 
-  // FPS 统计
+  private selection: THREE.Mesh;
+  private predictionLine: THREE.Line;
+  private predictAccum = 0;
+
+  private nextSeed = 1000;
   private fpsFrames = 0;
   private fpsElapsed = 0;
 
-  constructor(container: HTMLElement, ui?: SimUIState) {
-    this.specs = SOLAR_PRESET.bodies;
-    this.ui =
-      ui ??
-      reactive<SimUIState>({
-        systemName: SOLAR_PRESET.name,
-        simYears: 0,
-        scaleIndex: DEFAULT_SCALE_INDEX,
-        timeScale: TIME_SCALES[DEFAULT_SCALE_INDEX],
-        detailOmitted: false,
-        connected: false,
-        fps: 0,
-      });
-    this.ui.systemName = SOLAR_PRESET.name;
+  private readonly onPointerDown = (e: PointerEvent): void => this.handlePointerDown(e);
+  private readonly onPointerUp = (e: PointerEvent): void => this.handlePointerUp(e);
+  private downX = 0;
+  private downY = 0;
 
+  constructor(container: HTMLElement, ui: SimUIState) {
+    this.ui = ui;
     this.renderer = new SceneRenderer(container);
-    this.buildScene();
+    this.effects = new CollisionEffects(this.renderer.scene);
+
+    this.renderer.scene.add(createStarfield());
+    this.renderer.scene.add(new THREE.AmbientLight(0x223044, 0.6));
+
+    // 选中指示器（线框球，跟随选中天体）
+    this.selection = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 24, 16),
+      new THREE.MeshBasicMaterial({ color: 0x88ccff, wireframe: true, transparent: true, opacity: 0.5 }),
+    );
+    this.selection.visible = false;
+    this.renderer.scene.add(this.selection);
+
+    // 轨道预测线
+    this.predictionLine = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineDashedMaterial({ color: 0x88ccff, dashSize: 0.12, gapSize: 0.08, transparent: true, opacity: 0.7 }),
+    );
+    this.predictionLine.visible = false;
+    this.renderer.scene.add(this.predictionLine);
 
     this.bridge = new PhysicsBridge((msg) => this.onMessage(msg));
-    const init = buildInitData(SOLAR_PRESET);
-    this.bridge.send({ type: 'init', data: init }, [
-      init.masses.buffer,
-      init.positions.buffer,
-      init.velocities.buffer,
-    ]);
     this.bridge.send({ type: 'ping' });
+    this.loadPreset(this.ui.presetKey || PRESETS[0].key);
 
     this.renderer.setOnFrame((dt) => this.onFrame(dt));
     this.renderer.start();
 
-    // 默认以 1× 开始运行
+    const el = this.renderer.domElement;
+    el.addEventListener('pointerdown', this.onPointerDown);
+    el.addEventListener('pointerup', this.onPointerUp);
+
     this.setScaleIndex(DEFAULT_SCALE_INDEX);
   }
 
-  private buildScene(): void {
-    const scene = this.renderer.scene;
-    scene.add(createStarfield());
-    scene.add(new THREE.AmbientLight(0x223044, 0.6)); // 极弱补光，避免暗面纯黑
+  // —— 消息处理 ——
 
-    this.specs.forEach((spec, i) => {
-      if (spec.type === 'star') {
-        const star = createStar(spec);
-        scene.add(star.group);
-        this.bodies[i] = star.group;
-      } else {
-        const planet = createPlanet(spec);
-        scene.add(planet);
-        this.bodies[i] = planet;
-        this.initTrail(spec);
-      }
-    });
+  private onMessage(msg: PhysicsOutbound): void {
+    switch (msg.kind) {
+      case 'pong':
+        this.ui.connected = true;
+        break;
+      case 'bodies':
+        this.syncBodies(msg.metas);
+        this.ui.canUndo = msg.canUndo;
+        this.ui.canRedo = msg.canRedo;
+        this.ui.count = msg.metas.length;
+        break;
+      case 'snapshot':
+        this.onSnapshot(msg);
+        break;
+      case 'collision':
+        for (const ev of msg.events) this.effects.spawn(ev);
+        break;
+      case 'prediction':
+        this.onPrediction(msg.id, msg.points);
+        break;
+    }
   }
 
-  private initTrail(spec: BodySpec): void {
+  private onSnapshot(snap: SnapshotMessage): void {
+    this.latest = snap;
+    this.latestRecvReal = performance.now();
+    this.ui.simYears = snap.simYears;
+    this.ui.detailOmitted = snap.detailOmitted;
+    this.ui.mode = snap.mode;
+    this.ui.count = snap.count;
+
+    this.idIndex.clear();
+    for (let k = 0; k < snap.count; k++) {
+      this.idIndex.set(snap.ids[k], k);
+      this.pushTrail(snap.ids[k], snap.positions, k * STRIDE);
+    }
+  }
+
+  /** 按 id 增量同步可视对象：新增创建、消失移除、外观变更重建 */
+  private syncBodies(metas: BodyMeta[]): void {
+    const alive = new Set<number>();
+    for (const meta of metas) {
+      alive.add(meta.id);
+      const prev = this.metaMap.get(meta.id);
+      this.metaMap.set(meta.id, meta);
+
+      if (!this.meshMap.has(meta.id)) {
+        this.addMesh(meta);
+      } else if (prev && (prev.radius !== meta.radius || prev.color !== meta.color || prev.type !== meta.type)) {
+        // 外观变更：重建 mesh
+        this.removeMesh(meta.id, false);
+        this.addMesh(meta);
+      }
+    }
+    // 移除已消失天体
+    for (const id of [...this.meshMap.keys()]) {
+      if (!alive.has(id)) this.removeMesh(id, true);
+    }
+    // 选中天体已不存在则取消选中
+    if (this.ui.selectedId !== null && !alive.has(this.ui.selectedId)) {
+      this.selectBody(null);
+    }
+  }
+
+  private addMesh(meta: BodyMeta): void {
+    const { object } = createBody(meta);
+    object.userData.id = meta.id;
+    this.renderer.scene.add(object);
+    this.meshMap.set(meta.id, object);
+    this.initTrail(meta);
+  }
+
+  private removeMesh(id: number, removeTrail: boolean): void {
+    const obj = this.meshMap.get(id);
+    if (obj) {
+      this.renderer.scene.remove(obj);
+      this.meshMap.delete(id);
+    }
+    if (removeTrail) {
+      const trail = this.trailMap.get(id);
+      if (trail) {
+        this.renderer.scene.remove(trail.line);
+        this.trailMap.delete(id);
+      }
+      this.metaMap.delete(id);
+    }
+  }
+
+  // —— 轨迹 ——
+
+  private initTrail(meta: BodyMeta): void {
+    if (this.trailMap.has(meta.id)) return;
     const data = new Float32Array(TRAIL_MAX_POINTS * 3);
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(data, 3));
     geometry.setDrawRange(0, 0);
     const line = new THREE.Line(
       geometry,
-      new THREE.LineBasicMaterial({
-        color: spec.color,
-        transparent: true,
-        opacity: 0.35,
-        depthWrite: false,
-      }),
+      new THREE.LineBasicMaterial({ color: meta.color, transparent: true, opacity: 0.3, depthWrite: false }),
     );
     this.renderer.scene.add(line);
-    this.trailGeoms.push(geometry);
-    this.trailData.push(data);
-    this.trailCounts.push(0);
+    this.trailMap.set(meta.id, { line, data, count: 0 });
   }
 
-  private onMessage(msg: PhysicsOutbound): void {
-    if (msg.kind === 'pong') {
-      this.ui.connected = true;
-      return;
-    }
-    // snapshot
-    this.latest = msg;
-    this.latestRecvReal = performance.now();
-    this.ui.simYears = msg.simYears;
-    this.ui.detailOmitted = msg.detailOmitted;
-    this.pushTrails(msg);
-  }
-
-  /** 以快照原始位置推进轨迹（稳定、无外推抖动） */
-  private pushTrails(snap: PhysicsSnapshot): void {
-    let trailIdx = 0;
-    for (let i = 0; i < this.specs.length; i++) {
-      if (this.specs[i].type === 'star') continue;
-      const base = i * STRIDE;
-      this.appendTrailPoint(
-        trailIdx,
-        snap.positions[base],
-        snap.positions[base + 1],
-        snap.positions[base + 2],
-      );
-      trailIdx++;
-    }
-  }
-
-  private appendTrailPoint(t: number, x: number, y: number, z: number): void {
-    const data = this.trailData[t];
-    let count = this.trailCounts[t];
+  private pushTrail(id: number, positions: Float32Array, offset: number): void {
+    const trail = this.trailMap.get(id);
+    if (!trail) return;
+    let count = trail.count;
     if (count >= TRAIL_MAX_POINTS) {
-      data.copyWithin(0, 3); // 整体左移一个点
+      trail.data.copyWithin(0, 3);
       count = TRAIL_MAX_POINTS - 1;
     }
     const o = count * 3;
-    data[o] = x;
-    data[o + 1] = y;
-    data[o + 2] = z;
-    count++;
-    this.trailCounts[t] = count;
-    const geom = this.trailGeoms[t];
-    geom.setDrawRange(0, count);
-    (geom.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    trail.data[o] = positions[offset];
+    trail.data[o + 1] = positions[offset + 1];
+    trail.data[o + 2] = positions[offset + 2];
+    trail.count = count + 1;
+    trail.line.geometry.setDrawRange(0, trail.count);
+    (trail.line.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
   }
+
+  // —— 逐帧 ——
 
   private onFrame(dt: number): void {
     this.updateFps(dt);
-    if (!this.latest) return;
+    this.effects.update(dt);
 
-    const snap = this.latest;
-    let elapsedReal = (performance.now() - this.latestRecvReal) / 1000;
-    if (elapsedReal > MAX_EXTRAPOLATE_SECONDS) elapsedReal = MAX_EXTRAPOLATE_SECONDS;
-    const elapsedSim = this.ui.timeScale > 0 ? realSecondsToSimYears(elapsedReal, this.ui.timeScale) : 0;
+    if (this.latest) {
+      const snap = this.latest;
+      let elapsedReal = (performance.now() - this.latestRecvReal) / 1000;
+      if (elapsedReal > MAX_EXTRAPOLATE_SECONDS) elapsedReal = MAX_EXTRAPOLATE_SECONDS;
+      const elapsedSim = this.ui.timeScale > 0 ? realSecondsToSimYears(elapsedReal, this.ui.timeScale) : 0;
 
-    for (let i = 0; i < this.bodies.length; i++) {
-      const obj = this.bodies[i];
-      if (!obj) continue;
-      const base = i * STRIDE;
-      // 一阶外推：pos + vel * Δt_sim
-      obj.position.set(
-        snap.positions[base] + snap.velocities[base] * elapsedSim,
-        snap.positions[base + 1] + snap.velocities[base + 1] * elapsedSim,
-        snap.positions[base + 2] + snap.velocities[base + 2] * elapsedSim,
-      );
+      for (const [id, obj] of this.meshMap) {
+        const k = this.idIndex.get(id);
+        if (k === undefined) continue;
+        const base = k * STRIDE;
+        obj.position.set(
+          snap.positions[base] + snap.velocities[base] * elapsedSim,
+          snap.positions[base + 1] + snap.velocities[base + 1] * elapsedSim,
+          snap.positions[base + 2] + snap.velocities[base + 2] * elapsedSim,
+        );
+      }
+      this.updateSelectionInfo(snap, elapsedSim);
     }
+
+    // 周期性刷新选中天体的轨道预测
+    if (this.ui.selectedId !== null && this.ui.timeScale > 0) {
+      this.predictAccum += dt;
+      if (this.predictAccum >= PREDICT_INTERVAL) {
+        this.predictAccum = 0;
+        this.requestPrediction(this.ui.selectedId);
+      }
+    }
+  }
+
+  private updateSelectionInfo(snap: SnapshotMessage, elapsedSim: number): void {
+    const id = this.ui.selectedId;
+    if (id === null) return;
+    const k = this.idIndex.get(id);
+    const meta = this.metaMap.get(id);
+    if (k === undefined || !meta) return;
+    const base = k * STRIDE;
+    const x = snap.positions[base] + snap.velocities[base] * elapsedSim;
+    const y = snap.positions[base + 1] + snap.velocities[base + 1] * elapsedSim;
+    const z = snap.positions[base + 2] + snap.velocities[base + 2] * elapsedSim;
+    const vx = snap.velocities[base];
+    const vy = snap.velocities[base + 1];
+    const vz = snap.velocities[base + 2];
+
+    this.selection.visible = true;
+    this.selection.position.set(x, y, z);
+    this.selection.scale.setScalar(meta.radius * 1.5);
+
+    this.ui.selected = {
+      id,
+      type: meta.type,
+      mass: meta.mass,
+      radius: meta.radius,
+      color: meta.color,
+      x, y, z, vx, vy, vz,
+      speed: Math.sqrt(vx * vx + vy * vy + vz * vz),
+    };
   }
 
   private updateFps(dt: number): void {
@@ -202,7 +329,68 @@ export class SimulationController {
     }
   }
 
-  /** 切换调速档位（0 档暂停物理循环） */
+  // —— 拾取 ——
+
+  private handlePointerDown(e: PointerEvent): void {
+    this.downX = e.clientX;
+    this.downY = e.clientY;
+  }
+
+  private handlePointerUp(e: PointerEvent): void {
+    // 区分点击与拖拽（相机旋转）
+    if (Math.abs(e.clientX - this.downX) > 5 || Math.abs(e.clientY - this.downY) > 5) return;
+
+    const el = this.renderer.domElement;
+    const rect = el.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, this.renderer.camera);
+    const hits = raycaster.intersectObjects([...this.meshMap.values()], true);
+    if (hits.length === 0) {
+      this.selectBody(null);
+      return;
+    }
+    let obj: THREE.Object3D | null = hits[0].object;
+    while (obj && obj.userData.id === undefined) obj = obj.parent;
+    this.selectBody(obj ? (obj.userData.id as number) : null);
+  }
+
+  // —— 对外接口 ——
+
+  selectBody(id: number | null): void {
+    this.ui.selectedId = id;
+    if (id === null) {
+      this.ui.selected = null;
+      this.selection.visible = false;
+      this.predictionLine.visible = false;
+      return;
+    }
+    this.requestPrediction(id);
+  }
+
+  private requestPrediction(id: number): void {
+    this.bridge.send({ type: 'predict', id, years: PREDICT_YEARS, samples: PREDICT_SAMPLES });
+  }
+
+  private onPrediction(id: number, points: Float32Array): void {
+    if (id !== this.ui.selectedId || points.length < 6) {
+      return;
+    }
+    this.predictionLine.geometry.setAttribute('position', new THREE.BufferAttribute(points, 3));
+    this.predictionLine.computeLineDistances();
+    this.predictionLine.visible = true;
+  }
+
+  loadPreset(key: string): void {
+    this.ui.presetKey = key;
+    this.selectBody(null);
+    this.bridge.send({ type: 'load', state: buildPreset(key) });
+    if (this.ui.timeScale > 0) this.bridge.send({ type: 'start' });
+  }
+
   setScaleIndex(index: number): void {
     const scale = TIME_SCALES[index];
     this.ui.scaleIndex = index;
@@ -215,7 +403,38 @@ export class SimulationController {
     }
   }
 
+  setMode(mode: IntegrationMode): void {
+    this.ui.mode = mode;
+    this.bridge.send({ type: 'setMode', mode });
+  }
+
+  addBody(): void {
+    this.bridge.send({ type: 'addBody', body: makeDefaultBody(this.nextSeed++) });
+  }
+
+  removeSelected(): void {
+    if (this.ui.selectedId === null) return;
+    this.bridge.send({ type: 'removeBody', id: this.ui.selectedId });
+    this.selectBody(null);
+  }
+
+  editSelected(patch: BodyPatch): void {
+    if (this.ui.selectedId === null) return;
+    this.bridge.send({ type: 'editBody', id: this.ui.selectedId, patch });
+  }
+
+  undo(): void {
+    this.bridge.send({ type: 'undo' });
+  }
+
+  redo(): void {
+    this.bridge.send({ type: 'redo' });
+  }
+
   dispose(): void {
+    const el = this.renderer.domElement;
+    el.removeEventListener('pointerdown', this.onPointerDown);
+    el.removeEventListener('pointerup', this.onPointerUp);
     this.bridge.dispose();
     this.renderer.dispose();
   }

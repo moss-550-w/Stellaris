@@ -46,6 +46,11 @@ export class SceneRenderer {
     window.addEventListener('resize', this.handleResize);
   }
 
+  /** 暴露画布元素，供上层挂载交互（如 raycaster 拾取） */
+  get domElement(): HTMLCanvasElement {
+    return this.renderer.domElement;
+  }
+
   /** 注册逐帧回调（渲染前调用，用于更新天体位置） */
   setOnFrame(cb: FrameCallback): void {
     this.onFrame = cb;

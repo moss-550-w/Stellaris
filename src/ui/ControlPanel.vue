@@ -13,8 +13,8 @@ const speedDesc = computed(() => describeScale(props.state.timeScale));
 <template>
   <div class="panel">
     <div class="row info">
-      <span class="title">{{ state.systemName }}</span>
-      <span class="dot" :class="{ on: state.connected }" :title="state.connected ? '物理 Worker 已连通' : '未连通'"></span>
+      <span class="dot" :class="{ on: state.connected }"></span>
+      <span class="count">{{ state.count }} 天体</span>
       <span class="fps">{{ state.fps }} FPS</span>
     </div>
 
@@ -54,21 +54,13 @@ const speedDesc = computed(() => describeScale(props.state.timeScale));
   backdrop-filter: blur(10px);
   color: #cdd6f4;
   user-select: none;
-  min-width: 360px;
+  min-width: 380px;
 }
-
 .row {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-
-.info .title {
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 1px;
-}
-
 .dot {
   width: 8px;
   height: 8px;
@@ -80,17 +72,18 @@ const speedDesc = computed(() => describeScale(props.state.timeScale));
   background: #4ade80;
   box-shadow: 0 0 8px #4ade80;
 }
-
+.count {
+  font-size: 13px;
+  font-weight: 600;
+}
 .fps {
   margin-left: auto;
   font-size: 12px;
   opacity: 0.6;
 }
-
 .scales {
   justify-content: space-between;
 }
-
 .scale-btn {
   flex: 1;
   padding: 7px 0;
@@ -111,7 +104,6 @@ const speedDesc = computed(() => describeScale(props.state.timeScale));
   color: #fff;
   font-weight: 600;
 }
-
 .meta {
   font-size: 12px;
   opacity: 0.85;
