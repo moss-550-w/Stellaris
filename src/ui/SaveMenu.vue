@@ -10,6 +10,8 @@ const emit = defineEmits<{
   (e: 'import'): void;
   (e: 'screenshot'): void;
   (e: 'guide'): void;
+  (e: 'share'): void;
+  (e: 'gallery'): void;
 }>();
 
 const open = ref(false);
@@ -64,6 +66,8 @@ function fmt(iso: string): string {
         </div>
 
         <div class="section actions">
+          <button @click="emit('share')">🔗 分享链接</button>
+          <button @click="emit('gallery')">🌌 场景库</button>
           <button @click="emit('export')">导出文件</button>
           <button @click="emit('import')">导入文件</button>
           <button @click="emit('screenshot')">截图</button>

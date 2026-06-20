@@ -8,6 +8,15 @@ import ChallengePanel from '@/ui/ChallengePanel.vue';
 import SaveMenu from '@/ui/SaveMenu.vue';
 import Onboarding from '@/ui/Onboarding.vue';
 import DiagnosticsHud from '@/ui/DiagnosticsHud.vue';
+import ShareGallery from '@/ui/ShareGallery.vue';
+import {
+  encodeShare,
+  decodeShare,
+  buildShareUrl,
+  readShareFromHash,
+  clearShareHash,
+} from '@/utils/share';
+import type { GalleryItem } from '@/utils/gallery';
 import { TIME_SCALES, DEFAULT_SCALE_INDEX } from '@/core/time';
 import { DEFAULT_QUALITY, type QualityLevel } from '@/store/settings';
 import type { BodyPatch, IntegrationMode } from '@/physics/types';
@@ -50,8 +59,25 @@ const ui = reactive<SimUIState>({
 
 let controller: SimulationController | null = null;
 
-onMounted(() => {
-  if (host.value) controller = new SimulationController(host.value, ui);
+// —— 分享 / 场景库弹窗状态（V2.0 阶段八）——
+const overlayMode = ref<'share' | 'gallery' | null>(null);
+const shareUrl = ref('');
+
+onMounted(async () => {
+  if (!host.value) return;
+  controller = new SimulationController(host.value, ui);
+  // 启动时若 URL 携带分享串，解码加载（纯前端，离线可用）
+  const token = readShareFromHash();
+  if (token) {
+    try {
+      const data = await decodeShare(token);
+      controller.loadState(data.state, data.presetKey);
+    } catch (err) {
+      console.warn('分享链接解析失败：', err);
+    } finally {
+      clearShareHash(); // 加载后清理，避免刷新重复加载
+    }
+  }
 });
 onBeforeUnmount(() => {
   controller?.dispose();
@@ -129,6 +155,35 @@ function onExportReport(): void {
 function onGuide(): void {
   onboarding.value?.open();
 }
+
+// —— 分享 / 场景库（V2.0 阶段八）——
+async function onShare(): Promise<void> {
+  const state = controller?.getWorldState();
+  if (!state) return;
+  try {
+    const token = await encodeShare(ui.presetKey, state);
+    shareUrl.value = buildShareUrl(token);
+    overlayMode.value = 'share';
+  } catch (err) {
+    alert('生成分享链接失败：' + (err as Error).message);
+  }
+}
+function onGallery(): void {
+  overlayMode.value = 'gallery';
+}
+function onCloseOverlay(): void {
+  overlayMode.value = null;
+}
+function onPickGallery(item: GalleryItem): void {
+  controller?.loadState(item.build(), item.key);
+  controller?.setMode(item.suggestedMode);
+  ui.mode = item.suggestedMode;
+  overlayMode.value = null;
+}
+function onShareExportFile(): void {
+  overlayMode.value = null;
+  onExport();
+}
 </script>
 
 <template>
@@ -143,6 +198,8 @@ function onGuide(): void {
     @import="onImport"
     @screenshot="onScreenshot"
     @guide="onGuide"
+    @share="onShare"
+    @gallery="onGallery"
   />
   <Toolbar
     :state="ui"
@@ -164,6 +221,14 @@ function onGuide(): void {
       🛰️ {{ ui.discoveryToast }}
     </div>
   </transition>
+
+  <ShareGallery
+    :mode="overlayMode"
+    :share-url="shareUrl"
+    @close="onCloseOverlay"
+    @pick="onPickGallery"
+    @export-file="onShareExportFile"
+  />
 
   <Onboarding ref="onboarding" />
   <p class="hint">点击天体选中编辑 · 拖拽旋转视角 · 滚轮缩放</p>
