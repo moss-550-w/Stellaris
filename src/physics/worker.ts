@@ -1,89 +1,136 @@
 /**
- * 物理仿真层 —— Web Worker 入口（阶段零骨架）
+ * 物理仿真层 —— Web Worker 入口（阶段一：单恒星系统）
  *
- * 当前仅搭建：消息分发、双缓冲数据结构、主循环框架。
- * 真正的积分器（标准模式 Verlet / 流畅模式半隐式欧拉）在阶段一、二填充。
+ * 职责：
+ * - 持有天体状态，按固定步长执行 velocity Verlet 全 N 体积分；
+ * - accumulator 主循环：依据感知时间将真实流逝时间换算为模拟年推进量；
+ * - 高倍率（>1000×）自动放大步长并限制步数，触发「细节省略」；
+ * - 每个物理 tick 产出一份快照（位置 + 速度），以 Transferable 零拷贝回传主线程。
  */
-import type { PhysicsCommand, PhysicsOutbound, PhysicsSnapshot } from './types';
+import type { PhysicsCommand, PhysicsOutbound, PhysicsSnapshot, BodyInitData } from './types';
 import { STRIDE } from './types';
+import { FIXED_DT_YEARS, MAX_STEPS_PER_TICK } from './constants';
+import { computeAccelerations, verletStep } from './integrator';
+import { realSecondsToSimYears, HIGH_SPEED_THRESHOLD } from '@/core/time';
 
 // 规避 DOM 与 WebWorker lib 的全局类型冲突：对 worker 全局做最小化类型断言
 const ctx = self as unknown as {
   onmessage: ((e: MessageEvent<PhysicsCommand>) => void) | null;
-  postMessage(message: PhysicsOutbound): void;
+  postMessage(message: PhysicsOutbound, transfer?: Transferable[]): void;
 };
 
 interface SimState {
+  count: number;
+  masses: Float64Array;
+  positions: Float64Array;
+  velocities: Float64Array;
+  accOld: Float64Array;
+  accNew: Float64Array;
   running: boolean;
-  bodyCount: number;
   timeScale: number;
+  simYears: number;
   tick: number;
-  simTime: number;
-  /** 双缓冲：一个用于计算，一个用于传输，每帧交换 */
-  buffers: [Float32Array, Float32Array];
-  velBuffers: [Float32Array, Float32Array];
-  computeIndex: 0 | 1;
+  lastReal: number;
   timer: number | null;
 }
 
-const state: SimState = {
-  running: false,
-  bodyCount: 0,
-  timeScale: 1,
-  tick: 0,
-  simTime: 0,
-  buffers: [new Float32Array(0), new Float32Array(0)],
-  velBuffers: [new Float32Array(0), new Float32Array(0)],
-  computeIndex: 0,
-  timer: null,
-};
+let state: SimState | null = null;
 
-// 占位主循环步长（毫秒）。阶段一接入感知时间系统后由 timeScale 驱动真实步长。
-const STEP_MS = 16;
+/** 主循环间隔（毫秒），约等于 60Hz */
+const TICK_MS = 16;
 
-function init(bodyCount: number): void {
-  state.bodyCount = bodyCount;
-  const len = bodyCount * STRIDE;
-  state.buffers = [new Float32Array(len), new Float32Array(len)];
-  state.velBuffers = [new Float32Array(len), new Float32Array(len)];
-  state.computeIndex = 0;
-  state.tick = 0;
-  state.simTime = 0;
+function init(data: BodyInitData): void {
+  const { count } = data;
+  const n = count * STRIDE;
+  // init 数据经 Transferable 转移，所有权已归 Worker，直接持有
+  const positions = data.positions;
+  const velocities = data.velocities;
+  const masses = data.masses;
+  const accOld = new Float64Array(n);
+  const accNew = new Float64Array(n);
+  computeAccelerations(positions, masses, count, accOld);
+
+  state = {
+    count,
+    masses,
+    positions,
+    velocities,
+    accOld,
+    accNew,
+    running: false,
+    timeScale: 1,
+    simYears: 0,
+    tick: 0,
+    lastReal: 0,
+    timer: null,
+  };
+  emitSnapshot(false); // 初始帧，渲染端立即就位
 }
 
-function step(): void {
-  // —— 阶段零占位：未来在此对 computeIndex 缓冲执行 N 体积分 ——
-  state.tick += 1;
-  state.simTime += (STEP_MS / 1000) * state.timeScale;
-
-  // 双缓冲切换：刚写好的缓冲作为传输缓冲发出
-  const transferIndex = state.computeIndex;
-  state.computeIndex = (state.computeIndex ^ 1) as 0 | 1;
+function emitSnapshot(detailOmitted: boolean): void {
+  if (!state) return;
+  const n = state.count * STRIDE;
+  // 双缓冲思想：每帧产出独立的传输缓冲，Float64 计算结果收窄为 Float32 传输
+  const positions = new Float32Array(n);
+  const velocities = new Float32Array(n);
+  positions.set(state.positions);
+  velocities.set(state.velocities);
 
   const snapshot: PhysicsSnapshot = {
     kind: 'snapshot',
     tick: state.tick,
-    simTime: state.simTime,
-    bodyCount: state.bodyCount,
-    // 阶段零发送副本；阶段一改为可转移所有权 (Transferable) 的真双缓冲 + 渲染端归还
-    positions: state.buffers[transferIndex].slice(),
-    velocities: state.velBuffers[transferIndex].slice(),
+    simYears: state.simYears,
+    bodyCount: state.count,
+    positions,
+    velocities,
+    detailOmitted,
   };
-  ctx.postMessage(snapshot);
+  // 转移 buffer 所有权，零拷贝
+  ctx.postMessage(snapshot, [positions.buffer, velocities.buffer]);
+}
+
+function loop(): void {
+  if (!state || !state.running) return;
+
+  const now = performance.now();
+  let realDt = (now - state.lastReal) / 1000;
+  state.lastReal = now;
+  if (realDt > 0.1) realDt = 0.1; // 卡顿/切后台保护，避免一次推进过多
+
+  const advanceYears = realSecondsToSimYears(realDt, state.timeScale);
+
+  let dt = FIXED_DT_YEARS;
+  let steps = Math.round(advanceYears / dt);
+  let detailOmitted = false;
+
+  if (steps > MAX_STEPS_PER_TICK) {
+    detailOmitted = true;
+    if (state.timeScale > HIGH_SPEED_THRESHOLD) {
+      // 高速：放大单步步长，固定步数上限（牺牲精度换取稳定与性能）
+      dt = advanceYears / MAX_STEPS_PER_TICK;
+    }
+    steps = MAX_STEPS_PER_TICK;
+  }
+
+  for (let s = 0; s < steps; s++) {
+    verletStep(state.positions, state.velocities, state.masses, state.count, dt, state.accOld, state.accNew);
+  }
+  state.simYears += steps * dt;
+  state.tick += steps;
+
+  emitSnapshot(detailOmitted);
+  state.timer = self.setTimeout(loop, TICK_MS);
 }
 
 function startLoop(): void {
-  if (state.timer !== null) return;
+  if (!state || state.running) return;
   state.running = true;
-  const tickFn = (): void => {
-    if (!state.running) return;
-    step();
-    state.timer = self.setTimeout(tickFn, STEP_MS);
-  };
-  state.timer = self.setTimeout(tickFn, STEP_MS);
+  state.lastReal = performance.now();
+  loop();
 }
 
 function stopLoop(): void {
+  if (!state) return;
   state.running = false;
   if (state.timer !== null) {
     self.clearTimeout(state.timer);
@@ -98,7 +145,7 @@ ctx.onmessage = (e: MessageEvent<PhysicsCommand>): void => {
       ctx.postMessage({ kind: 'pong' });
       break;
     case 'init':
-      init(cmd.bodyCount);
+      init(cmd.data);
       break;
     case 'start':
       startLoop();
@@ -107,7 +154,7 @@ ctx.onmessage = (e: MessageEvent<PhysicsCommand>): void => {
       stopLoop();
       break;
     case 'setTimeScale':
-      state.timeScale = cmd.scale;
+      if (state) state.timeScale = cmd.scale;
       break;
   }
 };

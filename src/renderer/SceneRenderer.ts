@@ -1,17 +1,24 @@
 /**
- * 渲染表现层 —— Three.js 场景渲染器（阶段零骨架）
+ * 渲染表现层 —— Three.js 场景渲染器
  *
- * 当前仅初始化场景/相机/渲染器与渲染循环，呈现深空黑屏画布。
- * 天体网格、材质、粒子、后处理等在阶段一起逐步接入。
+ * 职责收敛为：场景/相机/渲染器生命周期、自由相机(OrbitControls)、自适应尺寸、主渲染循环。
+ * 天体对象的增删与逐帧位置更新交由上层 (SimulationController) 通过 scene 与 onFrame 回调驱动。
  */
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+
+export type FrameCallback = (deltaSeconds: number) => void;
 
 export class SceneRenderer {
+  readonly scene: THREE.Scene;
+  readonly camera: THREE.PerspectiveCamera;
+
   private readonly renderer: THREE.WebGLRenderer;
-  private readonly scene: THREE.Scene;
-  private readonly camera: THREE.PerspectiveCamera;
+  private readonly controls: OrbitControls;
   private readonly container: HTMLElement;
+  private readonly clock = new THREE.Clock();
   private rafId = 0;
+  private onFrame: FrameCallback | null = null;
   private readonly handleResize = (): void => this.onResize();
 
   constructor(container: HTMLElement) {
@@ -21,19 +28,35 @@ export class SceneRenderer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x000008); // 深空底色
+    this.scene.background = new THREE.Color(0x05060c); // 深空底色
 
-    this.camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1_000_000);
-    this.camera.position.set(0, 0, 50);
+    this.camera = new THREE.PerspectiveCamera(55, 1, 0.01, 5000);
+    this.camera.position.set(4, 3, 7);
 
     container.appendChild(this.renderer.domElement);
+
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.08;
+    this.controls.minDistance = 0.5;
+    this.controls.maxDistance = 200;
+    this.controls.target.set(0, 0, 0);
+
     this.onResize();
     window.addEventListener('resize', this.handleResize);
+  }
+
+  /** 注册逐帧回调（渲染前调用，用于更新天体位置） */
+  setOnFrame(cb: FrameCallback): void {
+    this.onFrame = cb;
   }
 
   start(): void {
     const loop = (): void => {
       this.rafId = requestAnimationFrame(loop);
+      const dt = this.clock.getDelta();
+      this.onFrame?.(dt);
+      this.controls.update();
       this.renderer.render(this.scene, this.camera);
     };
     loop();
@@ -50,6 +73,7 @@ export class SceneRenderer {
   dispose(): void {
     cancelAnimationFrame(this.rafId);
     window.removeEventListener('resize', this.handleResize);
+    this.controls.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
