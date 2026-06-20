@@ -118,6 +118,20 @@ function createBlackHole(meta: BodyMeta): BuiltBody {
   return { object: group, light: null };
 }
 
+function createSpacecraft(meta: BodyMeta): BuiltBody {
+  const group = new THREE.Group();
+  // 船体：小八面体，青色自发光（不受光、不发光照亮他物）
+  const hull = new THREE.Mesh(
+    new THREE.OctahedronGeometry(Math.max(meta.radius, 0.03), 0),
+    new THREE.MeshBasicMaterial({ color: 0x7fe9ff }),
+  );
+  hull.userData.id = meta.id;
+  group.add(hull);
+  // 引擎辉光（加性混合，置于 ATMOSPHERE 层）
+  group.add(makeHalo(0x7fe9ff, Math.max(meta.radius, 0.03) * 4, 0.6));
+  return { object: group, light: null };
+}
+
 /** 创建天体顶层对象，统一打上 userData.id 供拾取 */
 export function createBody(meta: BodyMeta): BuiltBody {
   let built: BuiltBody;
@@ -127,6 +141,9 @@ export function createBody(meta: BodyMeta): BuiltBody {
       break;
     case 'blackhole':
       built = createBlackHole(meta);
+      break;
+    case 'spacecraft':
+      built = createSpacecraft(meta);
       break;
     default:
       built = createPlanet(meta);

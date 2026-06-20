@@ -9,11 +9,12 @@ const emit = defineEmits<{
   (e: 'edit', patch: Record<string, number | string>): void;
   (e: 'remove'): void;
   (e: 'close'): void;
+  (e: 'thrust', mode: 'off' | 'prograde' | 'retrograde'): void;
 }>();
 
 const scienceOpen = ref(false);
 
-const TYPE_LABELS: Record<BodyType, string> = { star: '恒星', rocky: '岩质', gas: '气态', blackhole: '黑洞' };
+const TYPE_LABELS: Record<BodyType, string> = { star: '恒星', rocky: '岩质', gas: '气态', blackhole: '黑洞', spacecraft: '航天器' };
 const STAGE_LABELS: Record<string, string> = {
   none: '',
   main_sequence: '主序星',
@@ -58,47 +59,72 @@ const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
       <button class="close" @click="emit('close')">✕</button>
     </div>
 
-    <label class="field">
-      <span>类型</span>
-      <select v-model="type" @change="emit('edit', { type })">
-        <option value="rocky">岩质</option>
-        <option value="gas">气态</option>
-        <option value="star">恒星</option>
-        <option value="blackhole">黑洞</option>
-      </select>
-    </label>
-
-    <label class="field">
-      <span>质量</span>
-      <input type="number" v-model.number="mass" step="0.0000001" @change="emit('edit', { mass })" />
-    </label>
-
-    <label class="field">
-      <span>半径 {{ radius.toFixed(3) }}</span>
-      <input type="range" min="0.02" max="0.6" step="0.005" v-model.number="radius" @input="emit('edit', { radius })" />
-    </label>
-
-    <div class="field colors">
-      <span>颜色</span>
-      <div class="swatches">
-        <button
-          v-for="c in SWATCHES"
-          :key="c"
-          class="swatch"
-          :style="{ background: hex(c) }"
-          @click="emit('edit', { color: c })"
-        ></button>
+    <!-- 航天器：推力控制 + 燃料；其它类型：常规编辑 -->
+    <template v-if="state.selected.type === 'spacecraft'">
+      <div class="ship">
+        <span class="ship-label">推力</span>
+        <div class="thrust-modes">
+          <button :class="{ active: state.selected.thrustMode === 'retrograde' }" @click="emit('thrust', 'retrograde')">◀ 逆行</button>
+          <button :class="{ active: state.selected.thrustMode === 'off' }" @click="emit('thrust', 'off')">停</button>
+          <button :class="{ active: state.selected.thrustMode === 'prograde' }" @click="emit('thrust', 'prograde')">顺行 ▶</button>
+        </div>
       </div>
-    </div>
-
-    <div class="vel">
-      <span>速度 (AU/年)</span>
-      <div class="vel-inputs">
-        <input type="number" v-model.number="vx" step="0.1" @change="emit('edit', { vx })" />
-        <input type="number" v-model.number="vy" step="0.1" @change="emit('edit', { vy })" />
-        <input type="number" v-model.number="vz" step="0.1" @change="emit('edit', { vz })" />
+      <div class="fuel">
+        <span>燃料</span>
+        <div class="fuel-bar">
+          <div
+            class="fuel-fill"
+            :class="{ empty: state.selected.fuel <= 0 }"
+            :style="{ width: (state.selected.fuelCapacity > 0 ? (state.selected.fuel / state.selected.fuelCapacity) * 100 : 0).toFixed(0) + '%' }"
+          ></div>
+        </div>
+        <span class="fuel-pct">{{ state.selected.fuel.toFixed(2) }} Δv</span>
       </div>
-    </div>
+    </template>
+
+    <template v-else>
+      <label class="field">
+        <span>类型</span>
+        <select v-model="type" @change="emit('edit', { type })">
+          <option value="rocky">岩质</option>
+          <option value="gas">气态</option>
+          <option value="star">恒星</option>
+          <option value="blackhole">黑洞</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>质量</span>
+        <input type="number" v-model.number="mass" step="0.0000001" @change="emit('edit', { mass })" />
+      </label>
+
+      <label class="field">
+        <span>半径 {{ radius.toFixed(3) }}</span>
+        <input type="range" min="0.02" max="0.6" step="0.005" v-model.number="radius" @input="emit('edit', { radius })" />
+      </label>
+
+      <div class="field colors">
+        <span>颜色</span>
+        <div class="swatches">
+          <button
+            v-for="c in SWATCHES"
+            :key="c"
+            class="swatch"
+            :style="{ background: hex(c) }"
+            @click="emit('edit', { color: c })"
+          ></button>
+        </div>
+      </div>
+
+      <div class="vel">
+        <span>速度 (AU/年)</span>
+        <div class="vel-inputs">
+          <input type="number" v-model.number="vx" step="0.1" @change="emit('edit', { vx })" />
+          <input type="number" v-model.number="vy" step="0.1" @change="emit('edit', { vy })" />
+          <input type="number" v-model.number="vz" step="0.1" @change="emit('edit', { vz })" />
+        </div>
+      </div>
+    </template>
 
     <div v-if="state.selected.stage !== 'none'" class="evolution">
       <span class="stage-badge">{{ STAGE_LABELS[state.selected.stage] }}</span>
@@ -230,6 +256,65 @@ const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
   font-size: 11px;
   opacity: 0.65;
   line-height: 1.5;
+}
+.ship {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ship-label {
+  font-size: 12px;
+  opacity: 0.8;
+}
+.thrust-modes {
+  display: flex;
+  gap: 6px;
+}
+.thrust-modes button {
+  flex: 1;
+  padding: 7px 0;
+  border-radius: 7px;
+  background: rgba(30, 38, 60, 0.6);
+  border: 1px solid rgba(120, 150, 220, 0.2);
+  color: #cdd6f4;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.16s;
+}
+.thrust-modes button:hover {
+  background: rgba(60, 80, 130, 0.6);
+}
+.thrust-modes button.active {
+  background: #2ea6a0;
+  border-color: #46c8c0;
+  color: #fff;
+  font-weight: 600;
+}
+.fuel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.fuel-bar {
+  flex: 1;
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.fuel-fill {
+  height: 100%;
+  background: #2ea6a0;
+  border-radius: 4px;
+  transition: width 0.2s;
+}
+.fuel-fill.empty {
+  background: #ff9aa2;
+}
+.fuel-pct {
+  opacity: 0.7;
+  white-space: nowrap;
 }
 .evolution {
   display: flex;

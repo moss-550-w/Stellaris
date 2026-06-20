@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, reactive } from 'vue';
+import { onMounted, onBeforeUnmount, ref, reactive, watch } from 'vue';
 import { SimulationController, DEFAULT_EVOLUTION_INDEX, type SimUIState } from '@/gameplay/SimulationController';
 import Toolbar from '@/ui/Toolbar.vue';
 import ControlPanel from '@/ui/ControlPanel.vue';
@@ -42,6 +42,8 @@ const ui = reactive<SimUIState>({
   challengeKey: null,
   challenge: null,
   evolutionIndex: DEFAULT_EVOLUTION_INDEX,
+  discovered: [],
+  discoveryToast: null,
 });
 
 let controller: SimulationController | null = null;
@@ -64,12 +66,23 @@ const onLoad = (key: string): void => controller?.loadPreset(key);
 const onMode = (m: IntegrationMode): void => controller?.setMode(m);
 const onQuality = (q: QualityLevel): void => controller?.setQuality(q);
 const onAdd = (): void => controller?.addBody();
+const onLaunch = (): void => controller?.launchSpacecraft();
 const onUndo = (): void => controller?.undo();
 const onRedo = (): void => controller?.redo();
 const onEdit = (patch: Record<string, number | string>): void => controller?.editSelected(patch as BodyPatch);
 const onRemove = (): void => controller?.removeSelected();
 const onCloseEditor = (): void => controller?.selectBody(null);
 const onChallenge = (key: string | null): void => controller?.setChallenge(key);
+const onThrust = (mode: 'off' | 'prograde' | 'retrograde'): void => controller?.setShipThrust(mode);
+const onDismissToast = (): void => controller?.clearDiscoveryToast();
+
+// 飞掠解锁提示 3.5 秒后自动消失
+watch(
+  () => ui.discoveryToast,
+  (v) => {
+    if (v) setTimeout(() => controller?.clearDiscoveryToast(), 3500);
+  },
+);
 
 // —— 存档 / 文件 / 截图 ——
 function onSave(name: string): void {
@@ -127,12 +140,19 @@ function onGuide(): void {
     @mode="onMode"
     @quality="onQuality"
     @add="onAdd"
+    @launch="onLaunch"
     @undo="onUndo"
     @redo="onRedo"
   />
   <ChallengePanel :state="ui" @select="onChallenge" />
-  <EditorPanel :state="ui" @edit="onEdit" @remove="onRemove" @close="onCloseEditor" />
+  <EditorPanel :state="ui" @edit="onEdit" @remove="onRemove" @close="onCloseEditor" @thrust="onThrust" />
   <ControlPanel :state="ui" @select="onSelect" @evolution="onEvolution" />
+
+  <transition name="toast">
+    <div v-if="ui.discoveryToast" class="toast" @click="onDismissToast">
+      🛰️ {{ ui.discoveryToast }}
+    </div>
+  </transition>
 
   <Onboarding ref="onboarding" />
   <p class="hint">点击天体选中编辑 · 拖拽旋转视角 · 滚轮缩放</p>
@@ -165,5 +185,29 @@ function onGuide(): void {
   color: #8893b0;
   pointer-events: none;
   user-select: none;
+}
+.toast {
+  position: fixed;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  border-radius: 10px;
+  background: rgba(46, 166, 160, 0.92);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 40;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.toast-enter-active,
+.toast-leave-active {
+  transition: all 0.3s ease;
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -10px);
 }
 </style>

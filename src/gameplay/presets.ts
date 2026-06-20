@@ -143,3 +143,20 @@ export function makeDefaultBody(seed: number): NewBody {
     1,
   );
 }
+
+/**
+ * 发射一艘航天器（V2.0 阶段六）：mass≈0 测试粒子，置于内侧近圆轨道，
+ * 自带燃料与推力，玩家可顺/逆行推进做引力弹弓。centralMass 取场景主导质量。
+ */
+export function makeSpacecraft(seed: number, centralMass = 1): NewBody {
+  const r = 0.7 + (seed % 4) * 0.25;
+  const angle = (seed * 1.7) % (Math.PI * 2);
+  const ship = circularOrbit(
+    { type: 'spacecraft', mass: 0, radius: 0.04, color: 0x7fe9ff, seed },
+    r,
+    angle,
+    centralMass,
+  );
+  ship.maxThrust = 6; // AU/年²：满油可得约 maxThrust × 0.6 ≈ 3.6 AU/年 总 Δv
+  return ship;
+}

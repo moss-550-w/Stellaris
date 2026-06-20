@@ -24,6 +24,7 @@ import type {
   IntegrationMode,
   NewBody,
   SerializedBody,
+  ThrustMode,
   WorldState,
 } from './types';
 import { STRIDE } from './types';
@@ -34,6 +35,9 @@ function initialStage(type: BodyType): EvolutionStage {
 }
 
 const INITIAL_CAPACITY = 64;
+
+/** 航天器满油全推力可持续燃烧时长（演化年），决定总 Δv = maxThrust × 此值 */
+const FULL_BURN_YEARS = 0.6;
 
 /** 按质量加权混合两个颜色（0xRRGGBB） */
 function mixColor(c1: number, w1: number, c2: number, w2: number): number {
@@ -62,6 +66,11 @@ export class World {
   ages: number[] = [];
   stages: EvolutionStage[] = [];
   baseRadii: number[] = [];
+  // 航天器状态（平行数组，V2.0 阶段六）。非航天器：fuel=0、maxThrust=0、thrustMode='off'
+  fuels: number[] = [];
+  fuelCapacities: number[] = [];
+  maxThrusts: number[] = [];
+  thrustModes: ThrustMode[] = [];
 
   count = 0;
   capacity: number;
@@ -138,6 +147,10 @@ export class World {
     this.ages[i] = b.age ?? 0;
     this.stages[i] = b.stage ?? initialStage(b.type);
     this.baseRadii[i] = b.baseRadius ?? b.radius;
+    this.maxThrusts[i] = b.maxThrust ?? 0;
+    this.fuelCapacities[i] = (b.maxThrust ?? 0) * FULL_BURN_YEARS;
+    this.fuels[i] = b.fuel ?? this.fuelCapacities[i];
+    this.thrustModes[i] = b.thrustMode ?? 'off';
     this.count++;
     this.recomputeAcc();
     return id;
@@ -169,6 +182,10 @@ export class World {
       this.ages[i] = this.ages[last];
       this.stages[i] = this.stages[last];
       this.baseRadii[i] = this.baseRadii[last];
+      this.fuels[i] = this.fuels[last];
+      this.fuelCapacities[i] = this.fuelCapacities[last];
+      this.maxThrusts[i] = this.maxThrusts[last];
+      this.thrustModes[i] = this.thrustModes[last];
     }
     this.count = last;
     this.types.length = last;
@@ -177,6 +194,10 @@ export class World {
     this.ages.length = last;
     this.stages.length = last;
     this.baseRadii.length = last;
+    this.fuels.length = last;
+    this.fuelCapacities.length = last;
+    this.maxThrusts.length = last;
+    this.thrustModes.length = last;
   }
 
   editBody(id: number, patch: BodyPatch): boolean {
@@ -209,13 +230,56 @@ export class World {
     computeAccelerations(this.positions, this.masses, this.count, this.accOld);
   }
 
-  /** 推进一个物理步（按当前精度档选择积分器） */
+  /** 推进一个物理步（按当前精度档选择积分器），随后施加航天器推力冲量 */
   step(dt: number): void {
     if (this.mode === 'standard') {
       verletStep(this.positions, this.velocities, this.masses, this.count, dt, this.accOld, this.accNew);
     } else {
       semiImplicitEulerStep(this.positions, this.velocities, this.masses, this.count, dt, this.accOld);
     }
+    this.applyThrust(dt);
+  }
+
+  /**
+   * 航天器推力：在引力步进之后以冲量方式施加（与 Verlet 引力积分解耦）。
+   * prograde 沿当前速度方向、retrograde 反向；Δv = maxThrust × throttle × dt，燃料按 Δv 等量消耗。
+   * 航天器 mass≈0 为测试粒子，推力不影响其它天体。
+   */
+  private applyThrust(dt: number): void {
+    for (let i = 0; i < this.count; i++) {
+      const mode = this.thrustModes[i];
+      if (mode === 'off') continue;
+      if (this.fuels[i] <= 0) {
+        this.thrustModes[i] = 'off';
+        continue;
+      }
+      const o = i * STRIDE;
+      const vx = this.velocities[o];
+      const vy = this.velocities[o + 1];
+      const vz = this.velocities[o + 2];
+      const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      if (speed < 1e-9) continue; // 速度为零无方向可循
+
+      let dv = this.maxThrusts[i] * dt;
+      if (dv > this.fuels[i]) dv = this.fuels[i]; // 燃料不足，烧到耗尽
+      this.fuels[i] -= dv;
+
+      const sign = mode === 'prograde' ? 1 : -1;
+      const k = (sign * dv) / speed;
+      this.velocities[o] = vx + vx * k;
+      this.velocities[o + 1] = vy + vy * k;
+      this.velocities[o + 2] = vz + vz * k;
+
+      if (this.fuels[i] <= 0) this.thrustModes[i] = 'off';
+    }
+  }
+
+  /** 设置航天器推力模式 */
+  setShipControl(id: number, mode: ThrustMode): boolean {
+    const i = this.indexOf(id);
+    if (i < 0 || this.types[i] !== 'spacecraft') return false;
+    this.thrustModes[i] = this.fuels[i] > 0 ? mode : 'off';
+    return true;
   }
 
   setMode(mode: IntegrationMode): void {
@@ -379,6 +443,10 @@ export class World {
     this.ages.length = 0;
     this.stages.length = 0;
     this.baseRadii.length = 0;
+    this.fuels.length = 0;
+    this.fuelCapacities.length = 0;
+    this.maxThrusts.length = 0;
+    this.thrustModes.length = 0;
     for (const b of state.bodies) {
       const i = this.count;
       const o = i * STRIDE;
@@ -398,6 +466,11 @@ export class World {
       this.ages[i] = b.age ?? 0;
       this.stages[i] = b.stage ?? initialStage(b.type);
       this.baseRadii[i] = b.baseRadius ?? b.radius;
+      // 航天器字段（V2.0 阶段六）：旧存档无 → 默认 0/off
+      this.maxThrusts[i] = b.maxThrust ?? 0;
+      this.fuelCapacities[i] = (b.maxThrust ?? 0) * FULL_BURN_YEARS;
+      this.fuels[i] = b.fuel ?? this.fuelCapacities[i];
+      this.thrustModes[i] = b.thrustMode ?? 'off';
       this.count++;
     }
     this.simYears = state.simYears;
@@ -427,6 +500,9 @@ export class World {
         age: this.ages[i],
         stage: this.stages[i],
         baseRadius: this.baseRadii[i],
+        fuel: this.fuels[i],
+        maxThrust: this.maxThrusts[i],
+        thrustMode: this.thrustModes[i],
       });
     }
     return {
@@ -452,6 +528,9 @@ export class World {
         stage,
         age: this.ages[i],
         remainingLife: remainingLife(this.masses[i], this.ages[i], stage),
+        fuel: this.fuels[i],
+        fuelCapacity: this.fuelCapacities[i],
+        thrustMode: this.thrustModes[i],
       });
     }
     return out;

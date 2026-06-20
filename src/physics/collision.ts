@@ -29,6 +29,8 @@ export function materialDensity(type: BodyType): number {
       return 1.0;
     case 'gas':
       return 0.4;
+    case 'spacecraft':
+      return 0.1; // 测试粒子，密度仅作占位
   }
 }
 

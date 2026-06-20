@@ -49,6 +49,15 @@ const CARDS: Record<BodyType, ScienceCard> = {
       '强引力会弯曲其后方星光，形成「引力透镜」效应。',
     ],
   },
+  spacecraft: {
+    title: '航天器',
+    intro: '质量极小的人造载具，可视为只受引力、不显著影响天体的「测试粒子」。',
+    facts: [
+      '引力弹弓（gravity assist）借天体引力改变速度方向与大小，几乎不耗燃料。',
+      'Δv（速度增量）是衡量航天任务燃料预算的核心指标。',
+      '旅行者号正是靠多次行星借力，才得以飞出太阳系。',
+    ],
+  },
 };
 
 export function scienceCard(type: BodyType): ScienceCard {

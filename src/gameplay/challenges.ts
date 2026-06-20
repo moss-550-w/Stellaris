@@ -162,6 +162,27 @@ const CHALLENGES: Challenge[] = [
       };
     },
   },
+  {
+    key: 'gravity-assist',
+    name: '引力弹弓',
+    goal: '发射探测器，借助引力（或推进）使其速度达到 8 AU/年',
+    evaluate: (ctx) => {
+      const ships = ctx.bodies.filter((b) => b.type === 'spacecraft');
+      if (ships.length === 0) {
+        return { progress: 0, done: false, reason: '点击「🚀 发射」放出一艘探测器' };
+      }
+      const fastest = ships.reduce((m, b) => Math.max(m, b.speed), 0);
+      const target = 8;
+      if (fastest >= target) {
+        return { progress: 1, done: true, reason: `达成！探测器速度 ${fastest.toFixed(1)} AU/年` };
+      }
+      return {
+        progress: Math.min(0.95, fastest / target),
+        done: false,
+        reason: `探测器最高 ${fastest.toFixed(1)} / ${target} AU/年（靠近大天体顺行加速借力）`,
+      };
+    },
+  },
 ];
 
 export function listChallenges(): Challenge[] {

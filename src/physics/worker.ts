@@ -57,6 +57,8 @@ function emitSnapshot(detailOmitted: boolean): void {
   positions.set(world.positions.subarray(0, n));
   const velocities = new Float32Array(n);
   velocities.set(world.velocities.subarray(0, n));
+  const fuels = new Float32Array(count);
+  for (let k = 0; k < count; k++) fuels[k] = world.fuels[k];
 
   const snapshot: SnapshotMessage = {
     kind: 'snapshot',
@@ -68,8 +70,9 @@ function emitSnapshot(detailOmitted: boolean): void {
     ids,
     positions,
     velocities,
+    fuels,
   };
-  ctx.postMessage(snapshot, [ids.buffer, positions.buffer, velocities.buffer]);
+  ctx.postMessage(snapshot, [ids.buffer, positions.buffer, velocities.buffer, fuels.buffer]);
 }
 
 /** 编辑/碰撞/撤销后刷新渲染端（集合 + 一帧位置） */
@@ -171,6 +174,11 @@ ctx.onmessage = (e: MessageEvent<PhysicsCommand>): void => {
 
     case 'setEvolutionScale':
       world.evolutionScale = cmd.scale;
+      break;
+
+    case 'setShipControl':
+      world.setShipControl(cmd.id, cmd.thrustMode);
+      emitBodies(); // 回显推力模式给 UI
       break;
 
     case 'addBody':

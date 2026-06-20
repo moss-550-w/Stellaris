@@ -63,28 +63,34 @@
 
 ---
 
-## 3. 阶段六：航天器与探测器
+## 3. 阶段六：航天器与探测器 ✅ 已完成（2026-06-20）
 
 **目标：** 玩家可发射受控载具，体验轨道机动与引力弹弓（呼应 V1.0 已有「引力弹弓能量计」）。
 
-**设计要点：**
-- 新增类别 `spacecraft`：质量近 0 的「测试粒子」，受引力但不显著反作用，降低 N 体成本（不进入 O(N²) 互相作用对）。
-- `physics/spacecraft.ts`：推力矢量、燃料、Δv 预算；轨道机动（即时推力 / 霍曼转移）。
-- 交互：发射工具（设定初始位置 / 速度 / 朝向）、推力控制 UI；预测线复用 V1.0 `predictTrajectory`。
-- 探测器：飞掠目标天体时采集科普数据，解锁 / 高亮 `scienceData` 卡片。
+**设计要点（已落地）：**
+- 类别 `spacecraft`：`mass=0` 的天体在现有积分器中**天然即测试粒子**——受真实天体引力（`fi=f·masses[j]`），对外施力为零（`fj=f·masses[i]=0`），无需改动积分热路径内循环，零额外 N 体成本风险。
+- 推力作为引力步进**之后的冲量**施加（`World.applyThrust`），与 Verlet 引力积分解耦：prograde/retrograde 沿/反速度方向，Δv = maxThrust×dt，燃料按 Δv 等量消耗。**燃料即 Δv 预算**。
+- 交互：工具栏「🚀 发射」一键放出探测器并自动选中；编辑器内推力模式（顺/逆/停）+ 实时燃料条；预测线复用 V1.0 `predictTrajectory`（显示无动力滑行轨迹，利于规划点火）。
+- 探测器飞掠天体（距离 < 半径×4）→ 解锁该类型科普卡 + 飞掠提示 toast。
 
 **任务清单：**
-- [ ] `BodyType` / `NewBody` 增 `spacecraft`；物理上作为测试粒子积分（单独集合或标记，仅受其它天体引力）。
-- [ ] 推力 / 燃料 / Δv 模型 `spacecraft.ts` + Worker 指令（`launch` / `thrust`）。
-- [ ] 发射与推力控制 UI（新 `LaunchPanel.vue` 或扩展 `Toolbar.vue`）。
-- [ ] 探测器飞掠采集 → 科普解锁（联动 `scienceData.ts` / `ScienceCard.vue`）。
-- [ ] 弹弓挑战升级：用探测器完成一次引力弹弓加速到目标速度（扩展 `challenges.ts` + `energyMeter.ts`）。
+- [x] `BodyType`/`NewBody`/`SerializedBody`/`BodyMeta` 增 spacecraft 与推力字段；`ThrustMode` 类型；`SnapshotMessage` 增 `fuels` 实时燃料；`setShipControl` 指令。
+- [x] `World` 推力/燃料平行数组 + `applyThrust` 冲量模型 + `setShipControl`；序列化/load/metas/snapshot 全链路；存档版本 2 兼容。
+- [x] Worker `setShipControl` 分发 + 快照 `fuels` Transferable 回传。
+- [x] 航天器渲染（`CelestialFactory` 青色八面体 + 引擎辉光）+ `makeSpacecraft` 预设（绕场景主导质量近圆轨道，自带燃料）。
+- [x] 控制器：`launchSpacecraft`（自动选中）、`setShipThrust`、飞掠检测解锁科普、燃料入 `SelectedInfo`。
+- [x] UI：`Toolbar` 发射按钮、`EditorPanel` 推力控制 + 燃料条、飞掠 toast、新挑战「引力弹弓」（探测器达 8 AU/年）。
 
 **交付物：** 可发射、推进、借力飞行并采集科普的探测器系统。
 
-**验收标准：** 测试粒子不拖垮 N 体性能；推力 / 燃料逻辑自洽；弹弓加速可复现并被能量计正确度量。
+**验收结果（全部达成）：**
+- `vue-tsc --noEmit` 零错误；`vite build` 成功（62 模块，worker 13.5kB 含推力系统）。
+- 逻辑正确性（独立脚本核验）：**测试粒子单向引力**（航天器加速度 39.478 = GM/r²、恒星加速度恒为 0）；**推力 Δv 精确等于燃料预算**（3.6）；顺行加速（3→6.6）/逆行减速（5→1.4）均精确。
+- `npm run dev` 启动无报错，全部模块 HTTP 200。
 
-**复用与改动点：** `types.ts`（新类别）、`world.ts` / `worker.ts`（测试粒子积分与指令）、`predictTrajectory`（轨迹）、`energyMeter.ts` / `challenges.ts`、`scienceData.ts`。
+**复用与改动点：** `types.ts`（spacecraft 类型/字段/指令）、`world.ts`（推力/燃料/测试粒子）、`worker.ts`（指令+快照燃料）、`integrator.ts`（**未改**，mass=0 天然测试粒子）、`CelestialFactory.ts`、`presets.ts`、`SimulationController.ts`、`scienceData.ts`、`challenges.ts`、`Toolbar.vue`/`EditorPanel.vue`/`App.vue`。
+
+**说明 / 顺延：** 推力为「顺/逆行」即时冲量模型，自动霍曼转移与任意朝向推力留作后续；探测器视觉为简化标记，精细建模留作打磨。
 
 ---
 

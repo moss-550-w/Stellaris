@@ -9,10 +9,16 @@
 /** 每个天体在缓冲中占用的分量数 (x, y, z) */
 export const STRIDE = 3;
 
-export type BodyType = 'star' | 'rocky' | 'gas' | 'blackhole';
+export type BodyType = 'star' | 'rocky' | 'gas' | 'blackhole' | 'spacecraft';
 
 /** 积分精度档：fluid = 流畅(半隐式欧拉)，standard = 标准(velocity Verlet) */
 export type IntegrationMode = 'fluid' | 'standard';
+
+/**
+ * 航天器推力模式（V2.0 阶段六）：
+ * off = 不推进；prograde = 顺行加速（沿速度方向）；retrograde = 逆行减速（反速度方向）。
+ */
+export type ThrustMode = 'off' | 'prograde' | 'retrograde';
 
 /**
  * 演化阶段（V2.0 阶段五）。
@@ -48,6 +54,13 @@ export interface NewBody {
   stage?: EvolutionStage;
   /** 主序基准半径（演化各阶段以此为基缩放）。可选——默认等于 radius */
   baseRadius?: number;
+  // —— 航天器字段（V2.0 阶段六），仅 spacecraft 使用 ——
+  /** 剩余燃料（以 Δv 预算计，AU/年）。可选——默认 0 */
+  fuel?: number;
+  /** 推力加速度大小（AU/年²）。可选——默认 0 */
+  maxThrust?: number;
+  /** 当前推力模式。可选——默认 'off' */
+  thrustMode?: ThrustMode;
 }
 
 /** 完整序列化天体 */
@@ -69,6 +82,13 @@ export interface BodyMeta {
   age: number;
   /** 剩余寿命（年，−1 表示稳定/不再演化），供信息卡展示 */
   remainingLife: number;
+  // —— 航天器（V2.0 阶段六）——
+  /** 剩余燃料（Δv 预算，AU/年）；非航天器为 0 */
+  fuel: number;
+  /** 满燃料量（用于 UI 进度条）；非航天器为 0 */
+  fuelCapacity: number;
+  /** 当前推力模式 */
+  thrustMode: ThrustMode;
 }
 
 /** 可编辑字段补丁 */
@@ -122,6 +142,7 @@ export type PhysicsCommand =
   | { type: 'redo' }
   | { type: 'predict'; id: number; years: number; samples: number }
   | { type: 'setEvolutionScale'; scale: number }
+  | { type: 'setShipControl'; id: number; thrustMode: ThrustMode }
   | { type: 'ping' };
 
 // —— Worker → 主线程 ——
@@ -145,6 +166,8 @@ export interface SnapshotMessage {
   ids: Int32Array;
   positions: Float32Array; // count * STRIDE
   velocities: Float32Array; // count * STRIDE
+  /** 各天体剩余燃料（count，非航天器为 0），供 UI 实时燃料条 */
+  fuels: Float32Array;
 }
 
 export interface CollisionMessage {

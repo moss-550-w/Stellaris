@@ -10,6 +10,7 @@ const emit = defineEmits<{
   (e: 'mode', mode: IntegrationMode): void;
   (e: 'quality', level: QualityLevel): void;
   (e: 'add'): void;
+  (e: 'launch'): void;
   (e: 'undo'): void;
   (e: 'redo'): void;
 }>();
@@ -41,6 +42,7 @@ function onQuality(e: Event): void {
     </div>
 
     <button class="act" @click="emit('add')">＋ 天体</button>
+    <button class="act" @click="emit('launch')">🚀 发射</button>
     <button class="act" :disabled="!state.canUndo" @click="emit('undo')">↶ 撤销</button>
     <button class="act" :disabled="!state.canRedo" @click="emit('redo')">↷ 重做</button>
 

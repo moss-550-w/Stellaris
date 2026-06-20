@@ -23,10 +23,12 @@ import type {
   PhysicsOutbound,
   SnapshotMessage,
   SerializedBody,
+  ThrustMode,
   WorldState,
 } from '@/physics/types';
 import { STRIDE } from '@/physics/types';
-import { PRESETS, buildPreset, makeDefaultBody } from './presets';
+import { scienceCard } from '@/utils/scienceData';
+import { PRESETS, buildPreset, makeDefaultBody, makeSpacecraft } from './presets';
 import { TIME_SCALES, DEFAULT_SCALE_INDEX, realSecondsToSimYears } from '@/core/time';
 import { habitableZone } from './habitableZone';
 import { EnergyMeter, type EnergyReading } from './energyMeter';
@@ -57,6 +59,10 @@ export interface SelectedInfo {
   stage: EvolutionStage;
   /** 剩余寿命（演化年，−1 表示稳定） */
   remainingLife: number;
+  // —— 航天器（V2.0 阶段六），非航天器 fuelCapacity=0 ——
+  fuel: number;
+  fuelCapacity: number;
+  thrustMode: ThrustMode;
 }
 
 export interface SimUIState {
@@ -79,6 +85,10 @@ export interface SimUIState {
   challenge: ChallengeResult | null;
   /** 演化倍率档位索引（V2.0 阶段五） */
   evolutionIndex: number;
+  /** 探测器已解锁的科普标题（V2.0 阶段六） */
+  discovered: string[];
+  /** 最近一次探测器飞掠解锁的提示（瞬态），null 表示无 */
+  discoveryToast: string | null;
 }
 
 const TRAIL_MAX_POINTS = 220;
@@ -123,6 +133,10 @@ export class SimulationController {
   private fpsElapsed = 0;
   /** 本会话累计观测到的超新星次数（供挑战判定） */
   private supernovaeWitnessed = 0;
+  /** 已解锁科普的天体类型标题集合（探测器飞掠采集） */
+  private readonly discovered = new Set<string>();
+  /** 待自动选中的新天体类型（发射航天器后选中它） */
+  private pendingSelectType: string | null = null;
 
   private readonly onPointerDown = (e: PointerEvent): void => this.handlePointerDown(e);
   private readonly onPointerUp = (e: PointerEvent): void => this.handlePointerUp(e);
@@ -219,6 +233,45 @@ export class SimulationController {
       this.idIndex.set(snap.ids[k], k);
       this.pushTrail(snap.ids[k], snap.positions, k * STRIDE);
     }
+    this.detectFlyby(snap);
+  }
+
+  /**
+   * 探测器飞掠采集：航天器接近某天体（距离 < 该天体半径的若干倍）时，
+   * 解锁其类型的科普卡（每类型一次）。纯主线程逻辑，不改动物理。
+   */
+  private detectFlyby(snap: SnapshotMessage): void {
+    // 找出所有航天器索引
+    const ships: number[] = [];
+    for (let k = 0; k < snap.count; k++) {
+      const meta = this.metaMap.get(snap.ids[k]);
+      if (meta && meta.type === 'spacecraft') ships.push(k);
+    }
+    if (ships.length === 0) return;
+
+    for (let k = 0; k < snap.count; k++) {
+      const meta = this.metaMap.get(snap.ids[k]);
+      if (!meta || meta.type === 'spacecraft') continue;
+      const card = scienceCard(meta.type);
+      if (this.discovered.has(card.title)) continue;
+
+      const bx = snap.positions[k * STRIDE];
+      const by = snap.positions[k * STRIDE + 1];
+      const bz = snap.positions[k * STRIDE + 2];
+      const reach = Math.max(meta.radius * 4, 0.25);
+      for (const s of ships) {
+        const sx = snap.positions[s * STRIDE];
+        const sy = snap.positions[s * STRIDE + 1];
+        const sz = snap.positions[s * STRIDE + 2];
+        const d2 = (sx - bx) ** 2 + (sy - by) ** 2 + (sz - bz) ** 2;
+        if (d2 < reach * reach) {
+          this.discovered.add(card.title);
+          this.ui.discovered = [...this.discovered];
+          this.ui.discoveryToast = `探测器飞掠：解锁科普「${card.title}」`;
+          break;
+        }
+      }
+    }
   }
 
   /** 按 id 增量同步可视对象：新增创建、消失移除、外观变更重建 */
@@ -231,6 +284,11 @@ export class SimulationController {
 
       if (!this.meshMap.has(meta.id)) {
         this.addMesh(meta);
+        // 发射航天器后自动选中新天体
+        if (this.pendingSelectType !== null && meta.type === this.pendingSelectType) {
+          this.pendingSelectType = null;
+          this.selectBody(meta.id);
+        }
       } else if (prev && (prev.radius !== meta.radius || prev.color !== meta.color || prev.type !== meta.type)) {
         // 外观变更：重建 mesh
         this.removeMesh(meta.id, false);
@@ -494,6 +552,9 @@ export class SimulationController {
       speed: Math.sqrt(vx * vx + vy * vy + vz * vz),
       stage: meta.stage,
       remainingLife: meta.remainingLife,
+      fuel: snap.fuels[k], // 实时燃料来自快照
+      fuelCapacity: meta.fuelCapacity,
+      thrustMode: meta.thrustMode,
     };
   }
 
@@ -607,6 +668,28 @@ export class SimulationController {
 
   addBody(): void {
     this.bridge.send({ type: 'addBody', body: makeDefaultBody(this.nextSeed++) });
+  }
+
+  /** 发射一艘航天器（绕场景主导质量近圆轨道），并选中以便操控 */
+  launchSpacecraft(): void {
+    let centralMass = 1;
+    for (const meta of this.metaMap.values()) {
+      if (meta.mass > centralMass) centralMass = meta.mass;
+    }
+    this.pendingSelectType = 'spacecraft';
+    this.bridge.send({ type: 'addBody', body: makeSpacecraft(this.nextSeed++, centralMass) });
+  }
+
+  /** 设置选中航天器的推力模式 */
+  setShipThrust(mode: ThrustMode): void {
+    const id = this.ui.selectedId;
+    if (id === null) return;
+    this.bridge.send({ type: 'setShipControl', id, thrustMode: mode });
+  }
+
+  /** 清除飞掠解锁提示 */
+  clearDiscoveryToast(): void {
+    this.ui.discoveryToast = null;
   }
 
   removeSelected(): void {
