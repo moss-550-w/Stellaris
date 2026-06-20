@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue';
 import type { SimUIState } from '@/gameplay/SimulationController';
 import type { BodyType } from '@/physics/types';
+import ScienceCard from './ScienceCard.vue';
 
 const props = defineProps<{ state: SimUIState }>();
 const emit = defineEmits<{
@@ -9,6 +10,8 @@ const emit = defineEmits<{
   (e: 'remove'): void;
   (e: 'close'): void;
 }>();
+
+const scienceOpen = ref(false);
 
 const TYPE_LABELS: Record<BodyType, string> = { star: '恒星', rocky: '岩质', gas: '气态', blackhole: '黑洞' };
 const SWATCHES = [0xfff1cf, 0xffd9a0, 0x5b86b5, 0x76c08a, 0xc1654a, 0xc2b184, 0xa9c8ff, 0xd8b070];
@@ -106,6 +109,8 @@ const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
         </span>
       </div>
     </div>
+
+    <ScienceCard :state="state" :open="scienceOpen" @toggle="scienceOpen = !scienceOpen" />
 
     <button class="remove" @click="emit('remove')">删除天体</button>
   </div>

@@ -21,6 +21,8 @@ import type {
   IntegrationMode,
   PhysicsOutbound,
   SnapshotMessage,
+  SerializedBody,
+  WorldState,
 } from '@/physics/types';
 import { STRIDE } from '@/physics/types';
 import { PRESETS, buildPreset, makeDefaultBody } from './presets';
@@ -590,6 +592,49 @@ export class SimulationController {
 
   redo(): void {
     this.bridge.send({ type: 'redo' });
+  }
+
+  /** 由最新快照 + 元数据重建完整世界状态，用于存档/导出 */
+  getWorldState(): WorldState | null {
+    const snap = this.latest;
+    if (!snap) return null;
+    const bodies: SerializedBody[] = [];
+    let maxId = 0;
+    for (let k = 0; k < snap.count; k++) {
+      const id = snap.ids[k];
+      const meta = this.metaMap.get(id);
+      if (!meta) continue;
+      const base = k * STRIDE;
+      bodies.push({
+        id,
+        type: meta.type,
+        mass: meta.mass,
+        radius: meta.radius,
+        color: meta.color,
+        seed: meta.seed,
+        x: snap.positions[base],
+        y: snap.positions[base + 1],
+        z: snap.positions[base + 2],
+        vx: snap.velocities[base],
+        vy: snap.velocities[base + 1],
+        vz: snap.velocities[base + 2],
+      });
+      if (id > maxId) maxId = id;
+    }
+    return { bodies, simYears: snap.simYears, nextId: maxId + 1, rngState: 0x9e3779b9 };
+  }
+
+  /** 加载外部世界状态（存档/导入） */
+  loadState(state: WorldState, presetKey?: string): void {
+    if (presetKey) this.ui.presetKey = presetKey;
+    this.selectBody(null);
+    this.bridge.send({ type: 'load', state });
+    if (this.ui.timeScale > 0) this.bridge.send({ type: 'start' });
+  }
+
+  /** 抓取当前画面为 PNG dataURL（下一帧渲染后回调） */
+  captureScreenshot(): Promise<string> {
+    return this.renderer.capture();
   }
 
   dispose(): void {

@@ -19,5 +19,15 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // 代码分割：three.js 与 vue 各自独立 chunk，利于缓存与并行加载
+        manualChunks(id: string) {
+          if (id.includes('node_modules/three')) return 'three';
+          if (id.includes('node_modules/@vue') || id.includes('node_modules/vue')) return 'vue';
+          return undefined;
+        },
+      },
+    },
   },
 });

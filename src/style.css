@@ -17,3 +17,43 @@ body {
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* 触摸设备：禁用画布默认手势（缩放/滚动），交由 OrbitControls 处理 */
+canvas {
+  touch-action: none;
+}
+
+/* 移动端 / 窄屏：缩放 UI 面板，避免遮挡画面 */
+@media (max-width: 720px) {
+  .toolbar {
+    top: 10px !important;
+    right: 8px !important;
+    flex-wrap: wrap;
+    max-width: 62vw;
+    gap: 6px !important;
+    padding: 6px 8px !important;
+  }
+  .challenges {
+    top: 56px !important;
+    left: 8px !important;
+    width: 180px !important;
+    transform: scale(0.92);
+    transform-origin: top left;
+  }
+  .editor {
+    top: 56px !important;
+    right: 8px !important;
+    width: 200px !important;
+  }
+  .panel {
+    min-width: 0 !important;
+    width: 94vw;
+    padding: 10px 12px !important;
+  }
+  .save-menu {
+    left: 96px !important;
+  }
+  .hint {
+    display: none;
+  }
+}

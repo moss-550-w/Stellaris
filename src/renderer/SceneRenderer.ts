@@ -25,6 +25,7 @@ export class SceneRenderer {
   private usePost = QUALITY_PROFILES[DEFAULT_QUALITY].postProcess;
   private rafId = 0;
   private onFrame: FrameCallback | null = null;
+  private pendingCapture: ((dataUrl: string) => void) | null = null;
   private readonly handleResize = (): void => this.onResize();
 
   constructor(container: HTMLElement) {
@@ -94,8 +95,21 @@ export class SceneRenderer {
         this.renderer.setRenderTarget(null);
         this.renderer.render(this.scene, this.camera);
       }
+      // 截图：在渲染后、drawing buffer 清空前同步读取
+      if (this.pendingCapture) {
+        const resolve = this.pendingCapture;
+        this.pendingCapture = null;
+        resolve(this.renderer.domElement.toDataURL('image/png'));
+      }
     };
     loop();
+  }
+
+  /** 抓取下一帧画面为 PNG dataURL */
+  capture(): Promise<string> {
+    return new Promise((resolve) => {
+      this.pendingCapture = resolve;
+    });
   }
 
   private onResize(): void {

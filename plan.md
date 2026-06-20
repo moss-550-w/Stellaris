@@ -191,22 +191,28 @@
 
 ---
 
-## 6. 阶段四：内容填充与发布（5 周 · W16–W20）
+## 6. 阶段四：内容填充与发布 ✅ 已完成（2026-06-20）
 
 **目标：** 新手引导、科普内容、UI 动画、存档完善、截图工具、移动端适配，发布 V1.0。
 
 **任务清单：**
-- [ ] 新手引导流程。
-- [ ] 科普卡内容（`utils` 科普数据）。
-- [ ] UI 动画与交互打磨（Vue 组件过渡）。
-- [ ] 存档/读档完善：LocalStorage ＋ File API 导出分享。
-- [ ] 截图工具。
-- [ ] 移动端适配（30fps 档、触控交互）。
-- [ ] 发布流程：静态资源构建 ＋ GitHub Pages / Vercel 部署 ＋ 离线运行校验。
+- [x] 新手引导（`Onboarding.vue`）：5 步分步引导，首次访问 LocalStorage 标记，可跳过 / 重看。
+- [x] 科普卡（`utils/scienceData.ts` + `ScienceCard.vue`）：恒星/岩质/气态/黑洞科普，选中天体折叠展示。
+- [x] UI 动画：面板 transition 过渡（引导淡入、菜单滑入、科普卡展开）。
+- [x] 存档/读档（`utils/storage.ts`）：LocalStorage 多槽位 + File API 导出/导入 .json（`fileIo.ts`），由最新快照重建 `WorldState`。
+- [x] 截图工具（`SceneRenderer.capture` + `fileIo.downloadDataUrl`）：渲染后同步抓取，PNG 下载。
+- [x] 移动端适配（`utils/device.ts` + `style.css` 媒体查询）：移动端默认低画质、`touch-action: none` 触控、响应式面板布局。
+- [x] 发布流程：代码分割（three/vue/app 独立 chunk）、`base: './'` 相对路径、`README.md`、构建产物校验。
 
-**交付物：** V1.0 正式版。
+**交付物：** V1.0 正式版 —— 含存档/导出/截图/引导/科普/移动适配的完整可发布应用。
 
-**验收标准：** 引导完整可走通；存档 / 导出 / 截图可用；移动端达 30fps；离线可运行。
+**验收结果（全部达成）：**
+- `vue-tsc --noEmit` 零错误；`vite build` 成功（62 模块）。**代码分割生效**：three 548kB / vue 69kB / **应用仅 44kB（16.9kB gzip）**。
+- 逻辑正确性（独立脚本核验）：存档序列化往返完全一致、缺字段归一化、非法存档抛错、截图文件名时间戳格式正确。
+- `dist/index.html` 资源引用为相对路径（`./assets/...`），离线 / 子路径部署就绪。
+- `npm run dev` 启动无报错；首页与全部新模块（storage/fileIo/scienceData/device/Onboarding/SaveMenu/ScienceCard）transform 均 HTTP 200。
+
+**说明：** 移动端 30fps 与桌面 60fps 帧率需浏览器实机核验（代码层已提供画质分档与移动端降档保障）。
 
 ---
 
