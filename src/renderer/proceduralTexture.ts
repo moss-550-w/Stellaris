@@ -126,6 +126,35 @@ export function generateStarTexture(baseColor: number, seed: number, size = 256)
   return tex;
 }
 
+/**
+ * 生成气态行星纹理：纬向条带 + fBm 湍流扰动，呈木星类外观（纯程序化）。
+ */
+export function generateGasTexture(baseColor: number, seed: number, size = 256): THREE.CanvasTexture {
+  const noise = makeNoise(seed);
+  const base = new THREE.Color(baseColor);
+  const { canvas, ctx } = createCanvas(size);
+  const img = ctx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      // 湍流扰动纬度，使条带波动
+      const warp = fbm(noise, (x / size) * 3, (y / size) * 3) - 0.5;
+      const lat = y / size + warp * 0.08;
+      const band = 0.5 + 0.5 * Math.sin(lat * Math.PI * 14);
+      const shade = 0.7 + band * 0.5;
+      const idx = (y * size + x) * 4;
+      img.data[idx] = Math.min(255, base.r * 255 * shade);
+      img.data[idx + 1] = Math.min(255, base.g * 255 * shade);
+      img.data[idx + 2] = Math.min(255, base.b * 255 * shade);
+      img.data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 /** 生成径向渐变光晕纹理（用于加性混合 sprite） */
 export function generateGlowTexture(baseColor: number, size = 256): THREE.CanvasTexture {
   const { canvas, ctx } = createCanvas(size);
@@ -142,4 +171,36 @@ export function generateGlowTexture(baseColor: number, size = 256): THREE.Canvas
   ctx.fillRect(0, 0, size, size);
 
   return new THREE.CanvasTexture(canvas);
+}
+
+/**
+ * 生成黑洞吸积盘纹理（用于环面贴图）：内热外冷的橙白渐变 + 周向湍流亮纹，alpha 内外淡出。
+ * U 为周向、V 为径向。
+ */
+export function generateAccretionTexture(seed: number, size = 256): THREE.CanvasTexture {
+  const noise = makeNoise(seed);
+  const { canvas, ctx } = createCanvas(size);
+  const img = ctx.createImageData(size, size);
+
+  for (let v = 0; v < size; v++) {
+    const radial = v / size; // 0=内缘 1=外缘
+    // 内热(白黄) → 外冷(暗红)
+    const heat = 1 - radial;
+    const rr = 255;
+    const gg = 140 + heat * 110;
+    const bb = 40 + heat * 150;
+    const edge = Math.sin(radial * Math.PI); // 内外缘淡出
+    for (let u = 0; u < size; u++) {
+      const turb = 0.6 + 0.6 * fbm(noise, (u / size) * 12, (v / size) * 4);
+      const idx = (v * size + u) * 4;
+      img.data[idx] = Math.min(255, rr * turb);
+      img.data[idx + 1] = Math.min(255, gg * turb);
+      img.data[idx + 2] = Math.min(255, bb * turb);
+      img.data[idx + 3] = Math.min(255, edge * turb * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }

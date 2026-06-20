@@ -1,11 +1,14 @@
 /**
  * 渲染表现层 —— Three.js 场景渲染器
  *
- * 职责收敛为：场景/相机/渲染器生命周期、自由相机(OrbitControls)、自适应尺寸、主渲染循环。
+ * 职责：场景/相机/渲染器生命周期、自由相机(OrbitControls)、自适应尺寸、主渲染循环、
+ * 合并后处理(PostProcessor)与画质分档。
  * 天体对象的增删与逐帧位置更新交由上层 (SimulationController) 通过 scene 与 onFrame 回调驱动。
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { PostProcessor, type LensParams } from './PostProcessor';
+import { QUALITY_PROFILES, DEFAULT_QUALITY, type QualityLevel } from '@/store/settings';
 
 export type FrameCallback = (deltaSeconds: number) => void;
 
@@ -17,6 +20,9 @@ export class SceneRenderer {
   private readonly controls: OrbitControls;
   private readonly container: HTMLElement;
   private readonly clock = new THREE.Clock();
+  private readonly post: PostProcessor;
+  private quality: QualityLevel = DEFAULT_QUALITY;
+  private usePost = QUALITY_PROFILES[DEFAULT_QUALITY].postProcess;
   private rafId = 0;
   private onFrame: FrameCallback | null = null;
   private readonly handleResize = (): void => this.onResize();
@@ -25,7 +31,8 @@ export class SceneRenderer {
     this.container = container;
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const cap = QUALITY_PROFILES[DEFAULT_QUALITY].pixelRatioCap;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, cap));
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x05060c); // 深空底色
@@ -42,18 +49,37 @@ export class SceneRenderer {
     this.controls.maxDistance = 200;
     this.controls.target.set(0, 0, 0);
 
+    this.post = new PostProcessor(this.renderer);
+    this.post.setQuality(DEFAULT_QUALITY);
+
     this.onResize();
     window.addEventListener('resize', this.handleResize);
   }
 
-  /** 暴露画布元素，供上层挂载交互（如 raycaster 拾取） */
   get domElement(): HTMLCanvasElement {
     return this.renderer.domElement;
   }
 
-  /** 注册逐帧回调（渲染前调用，用于更新天体位置） */
   setOnFrame(cb: FrameCallback): void {
     this.onFrame = cb;
+  }
+
+  /** 设置引力透镜参数（由控制器每帧在 onFrame 内更新） */
+  setLens(params: LensParams): void {
+    this.post.setLens(params);
+  }
+
+  setQuality(level: QualityLevel): void {
+    this.quality = level;
+    const profile = QUALITY_PROFILES[level];
+    this.usePost = profile.postProcess;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, profile.pixelRatioCap));
+    this.post.setQuality(level);
+    this.onResize();
+  }
+
+  getQuality(): QualityLevel {
+    return this.quality;
   }
 
   start(): void {
@@ -62,7 +88,12 @@ export class SceneRenderer {
       const dt = this.clock.getDelta();
       this.onFrame?.(dt);
       this.controls.update();
-      this.renderer.render(this.scene, this.camera);
+      if (this.usePost) {
+        this.post.render(this.scene, this.camera);
+      } else {
+        this.renderer.setRenderTarget(null);
+        this.renderer.render(this.scene, this.camera);
+      }
     };
     loop();
   }
@@ -71,6 +102,7 @@ export class SceneRenderer {
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h);
+    this.post.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -79,6 +111,7 @@ export class SceneRenderer {
     cancelAnimationFrame(this.rafId);
     window.removeEventListener('resize', this.handleResize);
     this.controls.dispose();
+    this.post.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

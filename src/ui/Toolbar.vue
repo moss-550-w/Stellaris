@@ -2,18 +2,26 @@
 import { PRESETS } from '@/gameplay/presets';
 import type { SimUIState } from '@/gameplay/SimulationController';
 import type { IntegrationMode } from '@/physics/types';
+import { QUALITY_LABELS, type QualityLevel } from '@/store/settings';
 
 defineProps<{ state: SimUIState }>();
 const emit = defineEmits<{
   (e: 'load', key: string): void;
   (e: 'mode', mode: IntegrationMode): void;
+  (e: 'quality', level: QualityLevel): void;
   (e: 'add'): void;
   (e: 'undo'): void;
   (e: 'redo'): void;
 }>();
 
+const QUALITY_KEYS: QualityLevel[] = ['low', 'medium', 'high'];
+
 function onPreset(e: Event): void {
   emit('load', (e.target as HTMLSelectElement).value);
+}
+
+function onQuality(e: Event): void {
+  emit('quality', (e.target as HTMLSelectElement).value as QualityLevel);
 }
 </script>
 
@@ -35,6 +43,10 @@ function onPreset(e: Event): void {
     <button class="act" @click="emit('add')">＋ 天体</button>
     <button class="act" :disabled="!state.canUndo" @click="emit('undo')">↶ 撤销</button>
     <button class="act" :disabled="!state.canRedo" @click="emit('redo')">↷ 重做</button>
+
+    <select class="preset" :value="state.quality" @change="onQuality" title="画质档位">
+      <option v-for="q in QUALITY_KEYS" :key="q" :value="q">画质·{{ QUALITY_LABELS[q] }}</option>
+    </select>
   </div>
 </template>
 

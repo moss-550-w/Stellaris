@@ -4,7 +4,9 @@ import { SimulationController, type SimUIState } from '@/gameplay/SimulationCont
 import Toolbar from '@/ui/Toolbar.vue';
 import ControlPanel from '@/ui/ControlPanel.vue';
 import EditorPanel from '@/ui/EditorPanel.vue';
+import ChallengePanel from '@/ui/ChallengePanel.vue';
 import { TIME_SCALES, DEFAULT_SCALE_INDEX } from '@/core/time';
+import { DEFAULT_QUALITY, type QualityLevel } from '@/store/settings';
 import type { BodyPatch, IntegrationMode } from '@/physics/types';
 
 const host = ref<HTMLDivElement | null>(null);
@@ -23,6 +25,10 @@ const ui = reactive<SimUIState>({
   canRedo: false,
   selectedId: null,
   selected: null,
+  quality: DEFAULT_QUALITY,
+  energy: null,
+  challengeKey: null,
+  challenge: null,
 });
 
 let controller: SimulationController | null = null;
@@ -38,12 +44,14 @@ onBeforeUnmount(() => {
 const onSelect = (i: number): void => controller?.setScaleIndex(i);
 const onLoad = (key: string): void => controller?.loadPreset(key);
 const onMode = (m: IntegrationMode): void => controller?.setMode(m);
+const onQuality = (q: QualityLevel): void => controller?.setQuality(q);
 const onAdd = (): void => controller?.addBody();
 const onUndo = (): void => controller?.undo();
 const onRedo = (): void => controller?.redo();
 const onEdit = (patch: Record<string, number | string>): void => controller?.editSelected(patch as BodyPatch);
 const onRemove = (): void => controller?.removeSelected();
 const onCloseEditor = (): void => controller?.selectBody(null);
+const onChallenge = (key: string | null): void => controller?.setChallenge(key);
 </script>
 
 <template>
@@ -54,10 +62,12 @@ const onCloseEditor = (): void => controller?.selectBody(null);
     :state="ui"
     @load="onLoad"
     @mode="onMode"
+    @quality="onQuality"
     @add="onAdd"
     @undo="onUndo"
     @redo="onRedo"
   />
+  <ChallengePanel :state="ui" @select="onChallenge" />
   <EditorPanel :state="ui" @edit="onEdit" @remove="onRemove" @close="onCloseEditor" />
   <ControlPanel :state="ui" @select="onSelect" />
 
@@ -83,8 +93,9 @@ const onCloseEditor = (): void => controller?.selectBody(null);
 }
 .hint {
   position: fixed;
-  left: 18px;
-  bottom: 16px;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
   margin: 0;
   font-size: 11px;
   color: #8893b0;

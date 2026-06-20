@@ -18,9 +18,11 @@ export function escapeVelocity(totalMass: number, separation: number): number {
   return Math.sqrt((2 * G * totalMass) / separation);
 }
 
-/** 材质等效密度系数（非真实密度，仅用于洛希/材质倾向）：恒星 > 岩质 > 气态 */
+/** 材质等效密度系数（非真实密度，仅用于洛希/材质倾向）：黑洞 ≫ 恒星 > 岩质 > 气态 */
 export function materialDensity(type: BodyType): number {
   switch (type) {
+    case 'blackhole':
+      return 8;
     case 'star':
       return 1.4;
     case 'rocky':
@@ -52,6 +54,9 @@ export function classifyCollision(
   typeA: BodyType,
   typeB: BodyType,
 ): CollisionOutcome {
+  // 黑洞吞噬：接触即合并，无视相对速度
+  if (typeA === 'blackhole' || typeB === 'blackhole') return 'merge';
+
   const vEsc = escapeVelocity(totalMass, separation);
   const ratio = relSpeed / vEsc;
 

@@ -10,7 +10,7 @@ const emit = defineEmits<{
   (e: 'close'): void;
 }>();
 
-const TYPE_LABELS: Record<BodyType, string> = { star: '恒星', rocky: '岩质', gas: '气态' };
+const TYPE_LABELS: Record<BodyType, string> = { star: '恒星', rocky: '岩质', gas: '气态', blackhole: '黑洞' };
 const SWATCHES = [0xfff1cf, 0xffd9a0, 0x5b86b5, 0x76c08a, 0xc1654a, 0xc2b184, 0xa9c8ff, 0xd8b070];
 
 // 本地编辑缓冲（仅在选中目标切换时重置，避免运行中被实时数据覆盖）
@@ -52,6 +52,7 @@ const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
         <option value="rocky">岩质</option>
         <option value="gas">气态</option>
         <option value="star">恒星</option>
+        <option value="blackhole">黑洞</option>
       </select>
     </label>
 
@@ -89,7 +90,21 @@ const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
 
     <div class="readout">
       位置 ({{ state.selected.x.toFixed(2) }}, {{ state.selected.y.toFixed(2) }}, {{ state.selected.z.toFixed(2) }})
-      · 速率 {{ state.selected.speed.toFixed(2) }}
+    </div>
+
+    <div v-if="state.energy" class="energy" :class="{ slingshot: state.energy.slingshot }">
+      <div class="energy-head">
+        <span>引力弹弓能量计</span>
+        <span v-if="state.energy.slingshot" class="flash">弹弓加速！</span>
+      </div>
+      <div class="energy-row">
+        速率 {{ state.energy.speed.toFixed(2) }}
+        · 峰值 {{ state.energy.peakSpeed.toFixed(2) }}
+        · 增益
+        <span :class="state.energy.gainPct >= 0 ? 'pos' : 'neg'">
+          {{ state.energy.gainPct >= 0 ? '+' : '' }}{{ state.energy.gainPct.toFixed(1) }}%
+        </span>
+      </div>
     </div>
 
     <button class="remove" @click="emit('remove')">删除天体</button>
@@ -193,6 +208,37 @@ const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
   font-size: 11px;
   opacity: 0.65;
   line-height: 1.5;
+}
+.energy {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(40, 50, 75, 0.5);
+  border: 1px solid rgba(120, 150, 220, 0.18);
+  font-size: 11px;
+  transition: border-color 0.2s;
+}
+.energy.slingshot {
+  border-color: #facc15;
+}
+.energy-head {
+  display: flex;
+  justify-content: space-between;
+  opacity: 0.8;
+  margin-bottom: 4px;
+}
+.flash {
+  color: #facc15;
+  font-weight: 600;
+}
+.energy-row {
+  opacity: 0.85;
+  line-height: 1.5;
+}
+.pos {
+  color: #4ade80;
+}
+.neg {
+  color: #ff9aa2;
 }
 .remove {
   padding: 7px;

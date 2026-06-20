@@ -244,7 +244,9 @@ export class World {
       this.masses[a] = m;
       this.radii[a] = combinedRadius(this.radii[a], this.radii[b]);
       this.colors[a] = mixColor(this.colors[a], ma, this.colors[b], mb);
-      if (this.types[b] === 'star') this.types[a] = 'star';
+      // 类型优先级：黑洞 > 恒星 > 其它
+      if (this.types[a] === 'blackhole' || this.types[b] === 'blackhole') this.types[a] = 'blackhole';
+      else if (this.types[b] === 'star') this.types[a] = 'star';
       this.removeAt(b);
       return { kind: 'merge', x: cx, y: cy, z: cz, radius: this.radii[a], color: this.colors[a] };
     }

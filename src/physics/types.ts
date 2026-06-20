@@ -9,7 +9,7 @@
 /** 每个天体在缓冲中占用的分量数 (x, y, z) */
 export const STRIDE = 3;
 
-export type BodyType = 'star' | 'rocky' | 'gas';
+export type BodyType = 'star' | 'rocky' | 'gas' | 'blackhole';
 
 /** 积分精度档：fluid = 流畅(半隐式欧拉)，standard = 标准(velocity Verlet) */
 export type IntegrationMode = 'fluid' | 'standard';

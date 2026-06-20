@@ -95,10 +95,25 @@ function triangle(): NewBody[] {
   return out;
 }
 
+function blackholeSystem(): NewBody[] {
+  const bh: NewBody = {
+    type: 'blackhole', mass: 2, radius: 0.18, color: 0x000000, seed: 70,
+    x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
+  };
+  // 几颗近距天体绕黑洞，便于观察吸积/吞噬与引力透镜
+  const orbiters = [
+    circularOrbit({ type: 'star', mass: 0.5, radius: 0.16, color: 0xffd0a0, seed: 71 }, 1.4, 0.0, 2),
+    circularOrbit({ type: 'rocky', mass: 4e-6, radius: 0.09, color: 0x88aadd, seed: 72 }, 2.1, 2.0, 2),
+    circularOrbit({ type: 'gas', mass: 3e-5, radius: 0.16, color: 0xd8b070, seed: 73 }, 3.0, 4.1, 2),
+  ];
+  return [bh, ...orbiters];
+}
+
 export const PRESETS: PresetDef[] = [
   { key: 'single', name: '单恒星系统', build: singleStar },
   { key: 'binary', name: '双星系统', build: binary },
   { key: 'triangle', name: '三星编舞', build: triangle },
+  { key: 'blackhole', name: '黑洞系统', build: blackholeSystem },
 ];
 
 /** 为天体列表分配稳定 id，组装为 WorldState */
