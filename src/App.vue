@@ -9,6 +9,7 @@ import SaveMenu from '@/ui/SaveMenu.vue';
 import Onboarding from '@/ui/Onboarding.vue';
 import DiagnosticsHud from '@/ui/DiagnosticsHud.vue';
 import ShareGallery from '@/ui/ShareGallery.vue';
+import MusicWidget from '@/ui/MusicWidget.vue';
 import {
   encodeShare,
   decodeShare,
@@ -231,6 +232,7 @@ function onShareExportFile(): void {
   />
 
   <Onboarding ref="onboarding" />
+  <MusicWidget />
   <p class="hint">点击天体选中编辑 · 拖拽旋转视角 · 滚轮缩放</p>
 </template>
 
