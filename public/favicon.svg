@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <!-- 背景深色径向渐变 -->
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0b1021"/>
+      <stop offset="100%" stop-color="#02040a"/>
+    </radialGradient>
+
+    <!-- 中心恒星光辉 -->
+    <radialGradient id="starGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="25%" stop-color="#ffd27d" stop-opacity="0.9"/>
+      <stop offset="55%" stop-color="#ff8c42" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#ff4d00" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 行星渐变 -->
+    <linearGradient id="planetGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4facfe"/>
+      <stop offset="100%" stop-color="#00f2fe"/>
+    </linearGradient>
+
+    <!-- 行星辉光 -->
+    <radialGradient id="planetGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#4facfe" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#4facfe" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 外圆背景 -->
+  <circle cx="50" cy="50" r="48" fill="url(#bg)" stroke="#1a233a" stroke-width="1"/>
+
+  <!-- 背景星空点缀 -->
+  <circle cx="22" cy="28" r="0.8" fill="#ffffff" opacity="0.9"/>
+  <circle cx="76" cy="22" r="0.6" fill="#ffffff" opacity="0.7"/>
+  <circle cx="80" cy="68" r="0.9" fill="#ffffff" opacity="0.8"/>
+  <circle cx="18" cy="72" r="0.5" fill="#ffffff" opacity="0.6"/>
+  <circle cx="65" cy="15" r="0.5" fill="#ffffff" opacity="0.5"/>
+  <circle cx="30" cy="82" r="0.7" fill="#ffffff" opacity="0.7"/>
+
+  <!-- 内侧轨道 -->
+  <ellipse cx="50" cy="50" rx="28" ry="28" fill="none" stroke="#2a3a5c" stroke-width="0.8" opacity="0.6"/>
+
+  <!-- 外侧轨道 -->
+  <ellipse cx="50" cy="50" rx="40" ry="40" fill="none" stroke="#2a3a5c" stroke-width="0.8" opacity="0.4"/>
+
+  <!-- 主轨道（倾斜椭圆） -->
+  <ellipse cx="50" cy="50" rx="34" ry="34" fill="none" stroke="#3d5a80" stroke-width="1.2" opacity="0.8" transform="rotate(-20 50 50)"/>
+
+  <!-- 中心恒星 -->
+  <circle cx="50" cy="50" r="18" fill="url(#starGlow)"/>
+  <circle cx="50" cy="50" r="7" fill="#ffffff" opacity="0.95"/>
+  <circle cx="50" cy="50" r="4" fill="#fff5e0"/>
+
+  <!-- 恒星高光 -->
+  <circle cx="47" cy="47" r="1.5" fill="#ffffff" opacity="0.9"/>
+
+  <!-- 主轨道上的行星 -->
+  <g transform="rotate(-20 50 50)">
+    <circle cx="84" cy="50" r="5" fill="url(#planetGlow)"/>
+    <circle cx="84" cy="50" r="3" fill="url(#planetGrad)"/>
+    <path d="M 84 47 A 3 3 0 0 1 84 50" fill="#ffffff" opacity="0.3"/>
+  </g>
+
+  <!-- 内侧小行星 -->
+  <g transform="rotate(60 50 50)">
+    <circle cx="78" cy="50" r="2" fill="#a8dadc" opacity="0.9"/>
+  </g>
+</svg>
