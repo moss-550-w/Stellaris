@@ -27,6 +27,8 @@ const TRACK_FILES = [
   'Event Horizon Drift.mp3',
   'Stardust.mp3',
   'Visual Diffusion.mp3',
+  'Drift Beyond Orion.mp3',
+  'Ring of Creation.mp3',
 ];
 
 /** base 感知的音频目录前缀（base:'./' → './'） */
